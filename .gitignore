@@ -1,0 +1,26 @@
+# Dart / Pub
+.dart_tool/
+.packages
+pubspec.lock
+build/
+.pub-cache/
+
+# Environment - NEVER commit secrets
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Claude Code local config
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiled output
+bin/server

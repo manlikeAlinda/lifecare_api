@@ -1,0 +1,86 @@
+import 'package:bcrypt/bcrypt.dart';
+import 'package:lifecare_api/core/errors/api_error.dart';
+import 'package:lifecare_api/core/utils/uuid.dart';
+import 'user_repository.dart';
+
+class UserService {
+  final UserRepository _repo;
+
+  UserService(this._repo);
+
+  Future<(List<Map<String, dynamic>>, int)> listUsers({
+    int limit = 20,
+    int offset = 0,
+    String? role,
+  }) =>
+      _repo.findAll(limit: limit, offset: offset, role: role);
+
+  Future<Map<String, dynamic>> getUser(String id) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+    return user;
+  }
+
+  Future<Map<String, dynamic>> createUser(Map<String, dynamic> data) async {
+    final existing = await _repo.findByUsername(data['username'] as String);
+    if (existing != null) {
+      throw ApiError.conflict('Username already taken');
+    }
+
+    final id = generateUuid();
+    final passwordHash = BCrypt.hashpw(
+      data['password'] as String,
+      BCrypt.gensalt(),
+    );
+
+    final user = await _repo.create(
+      id: id,
+      username: data['username'] as String,
+      fullName: data['full_name'] as String,
+      passwordHash: passwordHash,
+      role: data['role'] as String? ?? 'staff',
+      email: data['email'] as String?,
+    );
+
+    return user;
+  }
+
+  Future<Map<String, dynamic>> updateUser(
+    String id,
+    Map<String, dynamic> data,
+  ) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+
+    final allowed = <String, dynamic>{};
+    if (data['full_name'] != null) allowed['full_name'] = data['full_name'];
+    if (data['email'] != null) allowed['email'] = data['email'];
+
+    final updated = await _repo.update(id, allowed);
+    return updated!;
+  }
+
+  Future<void> deleteUser(String id) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+    await _repo.softDelete(id);
+  }
+
+  Future<void> changePassword(String id, Map<String, dynamic> data) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+
+    final newHash = BCrypt.hashpw(
+      data['new_password'] as String,
+      BCrypt.gensalt(),
+    );
+    await _repo.updatePassword(id, newHash, 'bcrypt');
+  }
+
+  Future<Map<String, dynamic>> changeRole(String id, String role) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+    await _repo.updateRole(id, role);
+    return (await _repo.findById(id))!;
+  }
+}
