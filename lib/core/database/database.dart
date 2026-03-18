@@ -13,8 +13,16 @@ class Database {
       password: AppConfig.dbPassword,
       databaseName: AppConfig.dbName,
       maxConnections: AppConfig.dbPoolSize,
+      secure: true,
     );
-    log.info('Database pool initialized (${AppConfig.dbHost}:${AppConfig.dbPort}/${AppConfig.dbName})');
+    log.info('Database pool created — testing connection to ${AppConfig.dbHost}:${AppConfig.dbPort}/${AppConfig.dbName}');
+    try {
+      await _pool.execute('SELECT 1');
+      log.info('Database connection OK');
+    } catch (e) {
+      log.severe('Database connection FAILED: $e');
+      rethrow;
+    }
   }
 
   static MySQLConnectionPool get pool => _pool;
