@@ -13,12 +13,18 @@ class AuthService {
   AuthService(this._repo);
 
   Future<Map<String, dynamic>> login({
-    required String username,
+    String? username,
+    String? email,
     required String password,
     String? deviceInfo,
     String? ipAddress,
   }) async {
-    final user = await _repo.findUserByUsername(username);
+    Map<String, dynamic>? user;
+    if (username != null && username.isNotEmpty) {
+      user = await _repo.findUserByUsername(username);
+    } else if (email != null && email.isNotEmpty) {
+      user = await _repo.findUserByEmail(email);
+    }
     if (user == null) throw ApiError.unauthenticated('Invalid credentials');
 
     if (user['is_active'] == '0' || user['is_active'] == false) {
@@ -26,7 +32,8 @@ class AuthService {
     }
 
     final storedHash = user['password_hash'] as String;
-    final algorithm = user['hash_algorithm'] as String? ?? 'bcrypt';
+    final rawAlg = user['hash_algorithm'] as String? ?? '';
+    final algorithm = rawAlg.isEmpty ? 'sha256' : rawAlg;
     final userId = user['id'] as String;
     bool verified = false;
 

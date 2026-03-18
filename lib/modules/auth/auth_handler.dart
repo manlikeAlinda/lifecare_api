@@ -1,4 +1,5 @@
 import 'package:shelf/shelf.dart';
+import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
 import 'auth_service.dart';
@@ -12,12 +13,22 @@ class AuthHandler {
     final body = await parseJsonBody(request);
 
     Validator(body)
-      ..required('username')
       ..required('password')
       ..throwIfInvalid();
 
+    final username = body['username'] as String?;
+    final email = body['email'] as String?;
+
+    if ((username == null || username.trim().isEmpty) &&
+        (email == null || email.trim().isEmpty)) {
+      throw ApiError.validationError('Validation failed', details: [
+        {'field': 'username', 'message': 'username or email is required'},
+      ]);
+    }
+
     final result = await _service.login(
-      username: body['username'] as String,
+      username: username?.trim(),
+      email: email?.trim(),
       password: body['password'] as String,
       deviceInfo: body['device_info'] as String?,
       ipAddress: request.headers['x-forwarded-for']?.split(',').first.trim() ??

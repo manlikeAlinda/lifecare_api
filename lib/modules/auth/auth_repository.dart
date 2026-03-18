@@ -34,6 +34,23 @@ class AuthRepository {
     return _rowToMap(result.rows.first);
   }
 
+  Future<Map<String, dynamic>?> findUserByEmail(String email) async {
+    final result = await _pool.execute(
+      'SELECT '
+      '${_uuidHex('u.user_id', 'id')}, '
+      'u.username, u.display_name AS full_name, u.is_active, '
+      'u.password_hash, u.password_alg AS hash_algorithm, '
+      'COALESCE(r.role_key, \'staff\') AS role '
+      'FROM users u '
+      'LEFT JOIN user_roles ur ON ur.user_id = u.user_id '
+      'LEFT JOIN roles r ON r.role_id = ur.role_id '
+      'WHERE u.email = :email LIMIT 1',
+      {'email': email},
+    );
+    if (result.rows.isEmpty) return null;
+    return _rowToMap(result.rows.first);
+  }
+
   Future<Map<String, dynamic>?> findUserById(String id) async {
     final result = await _pool.execute(
       'SELECT '
