@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:shelf/shelf.dart';
 import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:lifecare_api/core/config/app_config.dart';
@@ -42,6 +44,13 @@ Middleware authMiddleware() {
           return errorResponse(
             ApiError.unauthenticated('Invalid token type'),
             requestId,
+          );
+        }
+
+        if (payload['sub_type'] == 'patient') {
+          return Response.forbidden(
+            jsonEncode({'error': 'Patient tokens are not valid for staff endpoints'}),
+            headers: {'content-type': 'application/json'},
           );
         }
 

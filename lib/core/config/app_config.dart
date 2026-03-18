@@ -33,4 +33,7 @@ class AppConfig {
   static String get appEnv => _env['APP_ENV'] ?? 'production';
 
   static bool get isProduction => appEnv == 'production';
+
+  static String get smtpUser => _env['SMTP_USER'] ?? '';
+  static String get smtpPassword => _env['SMTP_PASSWORD'] ?? '';
 }

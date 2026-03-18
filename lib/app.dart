@@ -29,6 +29,13 @@ import 'package:lifecare_api/modules/catalog/catalog_service.dart';
 import 'package:lifecare_api/modules/analytics/analytics_handler.dart';
 import 'package:lifecare_api/modules/analytics/analytics_repository.dart';
 import 'package:lifecare_api/modules/analytics/analytics_service.dart';
+import 'package:lifecare_api/modules/patient_auth/patient_auth_handler.dart';
+import 'package:lifecare_api/modules/patient_auth/patient_auth_repository.dart';
+import 'package:lifecare_api/modules/patient_auth/patient_auth_service.dart';
+import 'package:lifecare_api/modules/patient_credentials/patient_credentials_handler.dart';
+import 'package:lifecare_api/modules/patient_credentials/patient_credentials_repository.dart';
+import 'package:lifecare_api/modules/patient_credentials/patient_credentials_service.dart';
+import 'package:lifecare_api/core/services/email_service.dart';
 
 Handler buildApp() {
   final pool = Database.pool;
@@ -41,6 +48,8 @@ Handler buildApp() {
   final encounterRepo = EncounterRepository(pool);
   final catalogRepo = CatalogRepository(pool);
   final analyticsRepo = AnalyticsRepository(pool);
+  final patientAuthRepo = PatientAuthRepository(pool);
+  final patientCredRepo = PatientCredentialsRepository(pool);
 
   // ── Services ────────────────────────────────────────────────────────────────
   final authService = AuthService(authRepo);
@@ -50,6 +59,9 @@ Handler buildApp() {
   final encounterService = EncounterService(encounterRepo, walletRepo);
   final catalogService = CatalogService(catalogRepo);
   final analyticsService = AnalyticsService(analyticsRepo);
+  final emailService = EmailService();
+  final patientAuthService = PatientAuthService(patientAuthRepo, authService);
+  final patientCredService = PatientCredentialsService(patientCredRepo, emailService);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   final authHandler = AuthHandler(authService);
@@ -59,6 +71,8 @@ Handler buildApp() {
   final encounterHandler = EncounterHandler(encounterService);
   final catalogHandler = CatalogHandler(catalogService);
   final analyticsHandler = AnalyticsHandler(analyticsService);
+  final patientAuthHandler = PatientAuthHandler(patientAuthService);
+  final patientCredHandler = PatientCredentialsHandler(patientCredService);
 
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
@@ -268,6 +282,45 @@ Handler buildApp() {
     '/v1/catalog/<id>',
     patientAuth.addHandler(
       (Request req) => catalogHandler.getById(req, req.params['id']!),
+    ),
+  );
+
+  // ── Patient Auth (public) ─────────────────────────────────────────────────────
+  router.post('/v1/patient-auth/activate', patientAuthHandler.activate);
+  router.post('/v1/patient-auth/login', patientAuthHandler.login);
+  router.post('/v1/patient-auth/refresh', patientAuthHandler.refresh);
+  router.post('/v1/patient-auth/logout', patientAuthHandler.logout);
+  router.post('/v1/patient-auth/change-password', patientAuthHandler.changePassword);
+
+  // ── Admin — Patient Credential Management ─────────────────────────────────────
+  router.post(
+    '/v1/admin/patient-credentials/<patientId>/generate',
+    adminOnly.addHandler(
+      (Request req) => patientCredHandler.generate(req, req.params['patientId']!),
+    ),
+  );
+  router.get(
+    '/v1/admin/patient-credentials/<patientId>',
+    adminOnly.addHandler(
+      (Request req) => patientCredHandler.getCredentials(req, req.params['patientId']!),
+    ),
+  );
+  router.post(
+    '/v1/admin/patient-credentials/<patientId>/reset',
+    adminOnly.addHandler(
+      (Request req) => patientCredHandler.reset(req, req.params['patientId']!),
+    ),
+  );
+  router.post(
+    '/v1/admin/patient-credentials/<patientId>/suspend',
+    adminOnly.addHandler(
+      (Request req) => patientCredHandler.suspend(req, req.params['patientId']!),
+    ),
+  );
+  router.post(
+    '/v1/admin/patient-credentials/<patientId>/reinstate',
+    adminOnly.addHandler(
+      (Request req) => patientCredHandler.reinstate(req, req.params['patientId']!),
     ),
   );
 

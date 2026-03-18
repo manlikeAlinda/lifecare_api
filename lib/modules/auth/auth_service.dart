@@ -136,6 +136,25 @@ class AuthService {
     );
   }
 
+  Future<String> issuePatientAccessToken({
+    required String patientId,
+    required String phone,
+    required String patientCode,
+  }) async {
+    final jwt = JWT({
+      'sub': patientId,
+      'sub_type': 'patient',
+      'phone': phone,
+      'patient_code': patientCode,
+      'type': 'access',
+      'iat': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    });
+    return jwt.sign(
+      SecretKey(AppConfig.jwtSecret),
+      expiresIn: Duration(minutes: AppConfig.jwtAccessExpiryMinutes),
+    );
+  }
+
   String _hashToken(String token) =>
       sha256.convert(utf8.encode(token)).toString();
 }
