@@ -113,6 +113,10 @@ Handler buildApp() {
     adminOnly.addHandler(userHandler.create),
   );
   router.get(
+    '/v1/users/me',
+    Pipeline().addMiddleware(auth).addHandler(userHandler.me),
+  );
+  router.get(
     '/v1/users/<id>',
     Pipeline().addMiddleware(auth).addHandler(
           (Request req) => userHandler.getById(req, req.params['id']!),

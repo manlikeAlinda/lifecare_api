@@ -38,6 +38,12 @@ class UserHandler {
     return createdResponse(user);
   }
 
+  Future<Response> me(Request request) async {
+    final caller = requireAuthUser(request);
+    final user = await _service.getUser(caller.id);
+    return okResponse(user);
+  }
+
   Future<Response> getById(Request request, String id) async {
     final user = await _service.getUser(id);
     return okResponse(user);
