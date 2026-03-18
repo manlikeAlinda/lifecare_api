@@ -13,15 +13,14 @@ class Database {
       password: AppConfig.dbPassword,
       databaseName: AppConfig.dbName,
       maxConnections: AppConfig.dbPoolSize,
-      secure: true,
     );
     log.info('Database pool created — testing connection to ${AppConfig.dbHost}:${AppConfig.dbPort}/${AppConfig.dbName}');
     try {
       await _pool.execute('SELECT 1');
       log.info('Database connection OK');
     } catch (e) {
-      log.severe('Database connection FAILED: $e');
-      rethrow;
+      log.severe('!!! DATABASE CONNECTION FAILED: $e !!!');
+      // Do not rethrow — app stays up so /health and /diag/db remain accessible
     }
   }
 

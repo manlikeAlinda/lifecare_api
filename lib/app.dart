@@ -85,6 +85,21 @@ Handler buildApp() {
   router.get('/health', (Request _) => Response.ok('{"status":"ok"}',
       headers: {'content-type': 'application/json'}));
 
+  // DB diagnostic (public, temporary — remove after confirming DB connects)
+  router.get('/diag/db', (Request _) async {
+    try {
+      await Database.pool.execute('SELECT 1');
+      return Response.ok('{"db":"ok"}',
+          headers: {'content-type': 'application/json'});
+    } catch (e) {
+      final detail = e.toString().replaceAll('"', "'");
+      return Response.internalServerError(
+        body: '{"db":"error","detail":"$detail"}',
+        headers: {'content-type': 'application/json'},
+      );
+    }
+  });
+
   // ── Auth (IAM) ───────────────────────────────────────────────────────────────
   router.post(
     '/v1/auth/login',
