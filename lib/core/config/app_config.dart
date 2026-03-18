@@ -28,7 +28,7 @@ class AppConfig {
   static int get jwtRefreshExpiryDays =>
       int.parse(_env['JWT_REFRESH_EXPIRY_DAYS'] ?? '30');
 
-  static int get port => int.parse(_env['SERVER_PORT'] ?? '8080');
+  static int get port => int.parse(_env['PORT'] ?? _env['SERVER_PORT'] ?? '8080');
 
   static String get appEnv => _env['APP_ENV'] ?? 'production';
 
