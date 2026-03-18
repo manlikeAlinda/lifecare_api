@@ -86,22 +86,20 @@ class AuthRepository {
     required String sessionId,
     required String userId,
     required String refreshTokenHash,
+    required String role,
     required DateTime expiresAt,
-    String? deviceInfo,
-    String? ipAddress,
   }) async {
     await _pool.execute(
-      'INSERT INTO sessions (session_id, user_id, refresh_token_hash, expires_at, device_info, ip_address) '
+      'INSERT INTO sessions (session_id, user_id, refresh_token_hash, role, expires_at) '
       'VALUES (UNHEX(REPLACE(:sessionId, \'-\', \'\')), '
       'UNHEX(REPLACE(:userId, \'-\', \'\')), '
-      ':refreshTokenHash, :expiresAt, :deviceInfo, :ipAddress)',
+      ':refreshTokenHash, :role, :expiresAt)',
       {
         'sessionId': sessionId,
         'userId': userId,
         'refreshTokenHash': refreshTokenHash,
+        'role': role,
         'expiresAt': _formatDateTime(expiresAt),
-        'deviceInfo': deviceInfo,
-        'ipAddress': ipAddress,
       },
     );
   }

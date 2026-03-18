@@ -16,8 +16,6 @@ class AuthService {
     String? username,
     String? email,
     required String password,
-    String? deviceInfo,
-    String? ipAddress,
   }) async {
     Map<String, dynamic>? user;
     if (username != null && username.isNotEmpty) {
@@ -56,8 +54,6 @@ class AuthService {
       userId: userId,
       role: user['role'] as String,
       username: user['username'] as String,
-      deviceInfo: deviceInfo,
-      ipAddress: ipAddress,
     );
   }
 
@@ -92,8 +88,6 @@ class AuthService {
     required String userId,
     required String role,
     required String username,
-    String? deviceInfo,
-    String? ipAddress,
   }) async {
     final accessToken = _generateAccessToken(
       userId: userId,
@@ -112,9 +106,8 @@ class AuthService {
       sessionId: sessionId,
       userId: userId,
       refreshTokenHash: refreshTokenHash,
+      role: role,
       expiresAt: expiresAt,
-      deviceInfo: deviceInfo,
-      ipAddress: ipAddress,
     );
 
     return {

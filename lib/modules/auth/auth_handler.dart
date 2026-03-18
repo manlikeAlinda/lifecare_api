@@ -30,9 +30,6 @@ class AuthHandler {
       username: username?.trim(),
       email: email?.trim(),
       password: body['password'] as String,
-      deviceInfo: body['device_info'] as String?,
-      ipAddress: request.headers['x-forwarded-for']?.split(',').first.trim() ??
-          request.headers['x-real-ip'],
     );
 
     return okResponse(result);
