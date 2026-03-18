@@ -12,7 +12,7 @@ class AppConfig {
   static String get dbName => _env['DB_NAME'] ?? 'lifecare';
   static String get dbUser => _env['DB_USER'] ?? 'root';
   static String get dbPassword => _env['DB_PASSWORD'] ?? '';
-  static int get dbPoolSize => int.parse(_env['DB_POOL_SIZE'] ?? '10');
+  static int get dbPoolSize => int.parse(_env['DB_POOL_SIZE'] ?? '2');
 
   static String get jwtSecret {
     final secret = _env['JWT_SECRET'];
