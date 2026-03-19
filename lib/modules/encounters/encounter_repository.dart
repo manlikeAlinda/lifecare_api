@@ -63,8 +63,11 @@ class EncounterRepository {
 
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
-      'e.status, e.total_cost, e.created_at '
-      'FROM encounters e $where '
+      'e.status, e.total_cost, e.created_at, '
+      'p.full_name AS patient_name, p.patient_code '
+      'FROM encounters e '
+      'LEFT JOIN patients p ON p.patient_id = e.patient_id '
+      '$where '
       'ORDER BY e.visited_at DESC LIMIT :limit OFFSET :offset',
       params,
     );
@@ -74,8 +77,10 @@ class EncounterRepository {
   Future<Map<String, dynamic>?> findById(String id) async {
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
-      'e.status, e.total_cost, e.created_at '
+      'e.status, e.total_cost, e.created_at, '
+      'p.full_name AS patient_name, p.patient_code '
       'FROM encounters e '
+      'LEFT JOIN patients p ON p.patient_id = e.patient_id '
       "WHERE e.encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
@@ -92,7 +97,7 @@ class EncounterRepository {
       "LOWER(CONCAT(SUBSTR(HEX(es.service_id),1,8),'-',SUBSTR(HEX(es.service_id),9,4),'-',"
       "SUBSTR(HEX(es.service_id),13,4),'-',SUBSTR(HEX(es.service_id),17,4),'-',"
       "SUBSTR(HEX(es.service_id),21))) AS service_id, "
-      'es.service_name AS name, es.quantity, es.price AS unit_price, es.price AS total_price '
+      'es.service_name AS name, es.quantity, es.price AS unit_price, (es.price * es.quantity) AS total_price '
       'FROM encounter_services es '
       "WHERE es.encounter_id = UNHEX(REPLACE(:id, '-', ''))",
       {'id': id},
@@ -105,7 +110,7 @@ class EncounterRepository {
       "SUBSTR(HEX(em.id),13,4),'-',SUBSTR(HEX(em.id),17,4),'-',"
       "SUBSTR(HEX(em.id),21))) AS id, "
       'em.medication_name AS name, em.quantity, '
-      'em.rate AS unit_price, em.rate AS total_price, '
+      'em.rate AS unit_price, (em.rate * em.quantity) AS total_price, '
       'em.dosage_instructions '
       'FROM encounter_medications em '
       "WHERE em.encounter_id = UNHEX(REPLACE(:id, '-', ''))",
