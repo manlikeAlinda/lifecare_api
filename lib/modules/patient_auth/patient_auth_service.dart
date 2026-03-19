@@ -43,7 +43,7 @@ class PatientAuthService {
     await _repo.activateCredential(credentialId, passwordHash);
 
     final patient = await _repo.findPatientById(patientId);
-    final patientCode = patient?['patient_number'] as String? ?? patientId;
+    final patientCode = patient?['patient_code'] as String? ?? patientId;
 
     final (accessToken, refreshToken, _) = await _createSession(
       patientId: patientId,
@@ -91,7 +91,7 @@ class PatientAuthService {
     await _repo.updateLastLogin(credentialId);
 
     final patient = await _repo.findPatientById(patientId);
-    final patientCode = patient?['patient_number'] as String? ?? patientId;
+    final patientCode = patient?['patient_code'] as String? ?? patientId;
 
     final (accessToken, refreshToken, _) = await _createSession(
       patientId: patientId,
@@ -143,8 +143,8 @@ class PatientAuthService {
 
     final patientId = session['patient_id'] as String;
     final patient = await _repo.findPatientById(patientId);
-    final patientCode = patient?['patient_number'] as String? ?? patientId;
-    final phone = patient?['phone'] as String? ?? '';
+    final patientCode = patient?['patient_code'] as String? ?? patientId;
+    final phone = patient?['phone_e164'] as String? ?? '';
 
     final accessToken = await _authService.issuePatientAccessToken(
       patientId: patientId,
