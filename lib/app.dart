@@ -303,6 +303,9 @@ Handler buildApp() {
       (Request req) => catalogHandler.getById(req, req.params['id']!),
     ),
   );
+  // Alias routes — app uses these shorter paths
+  router.get('/v1/services', patientAuth.addHandler(catalogHandler.listServices));
+  router.get('/v1/drugs', patientAuth.addHandler(catalogHandler.listDrugs));
 
   // ── Patient Auth (public) ─────────────────────────────────────────────────────
   router.post('/v1/patient-auth/activate', patientAuthHandler.activate);
