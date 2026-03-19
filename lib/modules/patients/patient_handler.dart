@@ -27,11 +27,8 @@ class PatientHandler {
     final caller = requireAuthUser(request);
 
     Validator(body)
-      ..required('first_name')
-      ..required('last_name')
-      ..email('email')
-      ..phoneE164('phone')
-      ..oneOf('gender', ['male', 'female', 'other'])
+      ..required('full_name')
+      ..phoneE164('phone_e164')
       ..throwIfInvalid();
 
     final patient = await _service.createPatient(body, caller.id);
@@ -48,9 +45,7 @@ class PatientHandler {
     final caller = requireAuthUser(request);
 
     Validator(body)
-      ..email('email')
-      ..phoneE164('phone')
-      ..oneOf('gender', ['male', 'female', 'other'])
+      ..phoneE164('phone_e164')
       ..throwIfInvalid();
 
     final patient = await _service.updatePatient(id, body, caller.id);
@@ -88,9 +83,9 @@ class PatientHandler {
     final body = await parseJsonBody(request);
 
     Validator(body)
-      ..required('first_name')
-      ..required('last_name')
-      ..oneOf('gender', ['male', 'female', 'other'])
+      ..required('full_name')
+      ..required('relationship')
+      ..phoneE164('phone_number')
       ..throwIfInvalid();
 
     final dep = await _service.createDependent(patientId, body);

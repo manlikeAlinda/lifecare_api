@@ -22,13 +22,13 @@ class PatientCredentialsService {
     final patient = await _repo.findPatientById(patientId);
     if (patient == null) throw ApiError.notFound('Patient not found');
 
-    final phoneE164 = patient['phone'] as String?;
+    final phoneE164 = patient['phone_e164'] as String?;
     if (phoneE164 == null || phoneE164.isEmpty) {
       throw ApiError.validationError(
           'Patient does not have a phone number on file');
     }
 
-    final patientCode = patient['patient_number'] as String? ?? patientId;
+    final patientCode = patient['patient_code'] as String? ?? patientId;
     final pin = _generatePin();
     final pinHash = BCrypt.hashpw(pin, BCrypt.gensalt(logRounds: 12));
     // Use a placeholder password hash — patient must set password on activation
@@ -88,7 +88,7 @@ class PatientCredentialsService {
       return {'patient_id': patientId, 'provisioned': false};
     }
 
-    final patientCode = patient['patient_number'] as String? ?? patientId;
+    final patientCode = patient['patient_code'] as String? ?? patientId;
     final status = credential['status'] as String;
 
     return {
@@ -113,7 +113,7 @@ class PatientCredentialsService {
     }
 
     final patient = await _repo.findPatientById(patientId);
-    final patientCode = patient?['patient_number'] as String? ?? patientId;
+    final patientCode = patient?['patient_code'] as String? ?? patientId;
 
     final pin = _generatePin();
     final pinHash = BCrypt.hashpw(pin, BCrypt.gensalt(logRounds: 12));

@@ -67,16 +67,13 @@ class EncounterService {
       encounterId: generateUuid(),
       patientId: patientId,
       walletId: wallet['id'] as String,
-      totalAmount: total,
-      walletBalanceBefore: balance,
+      totalCost: total,
       createdBy: createdBy,
       services: services,
       medications: medications,
-      encounterNumber: data['encounter_number'] as String?,
-      encounterType: data['encounter_type'] as String?,
-      provider: data['provider'] as String?,
-      notes: data['notes'] as String?,
-      encounterDate: data['encounter_date'] as String?,
+      referenceNumber: data['reference_number'] as String?,
+      serviceType: data['service_type'] as String?,
+      visitedAt: data['visited_at'] as String?,
     );
   }
 

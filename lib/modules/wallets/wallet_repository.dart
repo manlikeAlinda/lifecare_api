@@ -7,10 +7,26 @@ class WalletRepository {
 
   WalletRepository(this._pool);
 
-  static const _uuidId =
-      "LOWER(CONCAT(SUBSTR(HEX(id),1,8),'-',SUBSTR(HEX(id),9,4),'-',SUBSTR(HEX(id),13,4),'-',SUBSTR(HEX(id),17,4),'-',SUBSTR(HEX(id),21))) AS id";
-  static const _uuidPatientId =
-      "LOWER(CONCAT(SUBSTR(HEX(patient_id),1,8),'-',SUBSTR(HEX(patient_id),9,4),'-',SUBSTR(HEX(patient_id),13,4),'-',SUBSTR(HEX(patient_id),17,4),'-',SUBSTR(HEX(patient_id),21))) AS patient_id";
+  // ── DB column reality ─────────────────────────────────────────────────────
+  // wallets:      wallet_id (PK), primary_patient_id, balance_minor,
+  //               balance_shillings, status, created_at, last_activity_at
+  // wallet_ledger: ledger_id (PK), wallet_id, type, status,
+  //               amount_shillings, failure_reason, created_at
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Wallet SELECT — aliases wallet_id→id, primary_patient_id→patient_id,
+  // balance_shillings→balance, last_activity_at→updated_at for API compat.
+  static const _walletSelect =
+      'SELECT '
+      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
+      "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
+      "SUBSTR(HEX(wallet_id),21))) AS id, "
+      "LOWER(CONCAT(SUBSTR(HEX(primary_patient_id),1,8),'-',SUBSTR(HEX(primary_patient_id),9,4),'-',"
+      "SUBSTR(HEX(primary_patient_id),13,4),'-',SUBSTR(HEX(primary_patient_id),17,4),'-',"
+      "SUBSTR(HEX(primary_patient_id),21))) AS patient_id, "
+      'balance_shillings AS balance, status, created_at, '
+      'last_activity_at AS updated_at '
+      'FROM wallets';
 
   Future<(List<Map<String, dynamic>>, int)> findAll({
     int limit = 20,
@@ -23,26 +39,15 @@ class WalletRepository {
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      'SELECT $_uuidId, $_uuidPatientId, '
-      '(SELECT COALESCE(SUM(CASE WHEN transaction_type IN (\'deposit\',\'refund\',\'adjustment\') THEN amount '
-      'WHEN transaction_type IN (\'deduction\',\'debt_created\') THEN -amount ELSE 0 END), 0) '
-      'FROM wallet_ledger WHERE wallet_id = wallets.id) AS balance, '
-      'created_at, updated_at '
-      'FROM wallets ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+      '$_walletSelect ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
       {'limit': limit, 'offset': offset},
     );
-
     return (result.rows.map(_rowToMap).toList(), total);
   }
 
   Future<Map<String, dynamic>?> findById(String id) async {
     final result = await _pool.execute(
-      'SELECT $_uuidId, $_uuidPatientId, '
-      '(SELECT COALESCE(SUM(CASE WHEN transaction_type IN (\'deposit\',\'refund\',\'adjustment\') THEN amount '
-      'WHEN transaction_type IN (\'deduction\',\'debt_created\') THEN -amount ELSE 0 END), 0) '
-      'FROM wallet_ledger WHERE wallet_id = wallets.id) AS balance, '
-      'created_at, updated_at '
-      'FROM wallets WHERE ${uuidWhere('id', 'id')} LIMIT 1',
+      "$_walletSelect WHERE wallet_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
@@ -51,17 +56,14 @@ class WalletRepository {
 
   Future<Map<String, dynamic>?> findByPatientId(String patientId) async {
     final result = await _pool.execute(
-      'SELECT $_uuidId, $_uuidPatientId, '
-      '(SELECT COALESCE(SUM(CASE WHEN transaction_type IN (\'deposit\',\'refund\',\'adjustment\') THEN amount '
-      'WHEN transaction_type IN (\'deduction\',\'debt_created\') THEN -amount ELSE 0 END), 0) '
-      'FROM wallet_ledger WHERE wallet_id = wallets.id) AS balance, '
-      'created_at, updated_at '
-      'FROM wallets WHERE ${uuidWhere('patient_id', 'patientId')} LIMIT 1',
+      "$_walletSelect WHERE primary_patient_id = UNHEX(REPLACE(:patientId, '-', '')) LIMIT 1",
       {'patientId': patientId},
     );
     if (result.rows.isEmpty) return null;
     return _rowToMap(result.rows.first);
   }
+
+  // ── Ledger ────────────────────────────────────────────────────────────────
 
   Future<(List<Map<String, dynamic>>, int)> getLedger(
     String walletId, {
@@ -69,66 +71,69 @@ class WalletRepository {
     int offset = 0,
   }) async {
     final countResult = await _pool.execute(
-      'SELECT COUNT(*) as total FROM wallet_ledger WHERE ${uuidWhere('wallet_id', 'walletId')}',
+      "SELECT COUNT(*) as total FROM wallet_ledger "
+      "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
       {'walletId': walletId},
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
       'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(id),1,8),'-',SUBSTR(HEX(id),9,4),'-',SUBSTR(HEX(id),13,4),'-',SUBSTR(HEX(id),17,4),'-',SUBSTR(HEX(id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
-      'transaction_type, amount, balance_before, balance_after, '
-      'reference_type, notes, created_at '
-      'FROM wallet_ledger '
-      'WHERE ${uuidWhere('wallet_id', 'walletId')} '
+      "LOWER(CONCAT(SUBSTR(HEX(ledger_id),1,8),'-',SUBSTR(HEX(ledger_id),9,4),'-',"
+      "SUBSTR(HEX(ledger_id),13,4),'-',SUBSTR(HEX(ledger_id),17,4),'-',"
+      "SUBSTR(HEX(ledger_id),21))) AS id, "
+      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
+      "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
+      "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
+      'type AS transaction_type, amount_shillings AS amount, '
+      'status, created_at '
+      "FROM wallet_ledger "
+      "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
       'ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
       {'walletId': walletId, 'limit': limit, 'offset': offset},
     );
-
     return (result.rows.map(_rowToMap).toList(), total);
   }
 
-  /// Appends a ledger entry inside the given connection (for use within transactions).
+  // ── Internal helper: append a ledger row + update denormalised balance ────
+  // Used by both createTransaction (standalone) and encounter_repository
+  // (inside its own transaction, via the conn param).
   Future<void> appendLedgerEntry({
-    required dynamic conn, // MySQLConnectionPool or transaction connection
+    required dynamic conn,
     required String entryId,
     required String walletId,
     required String transactionType,
     required double amount,
-    required double balanceBefore,
-    required String? createdBy,
-    String? referenceType,
-    String? referenceId,
-    String? notes,
   }) async {
-    final balanceAfter = _calculateNewBalance(
-      balanceBefore,
-      transactionType,
-      amount,
-    );
+    final amountInt = amount.round();
+    // Signed delta: positive types add, negative types subtract.
+    final isCredit =
+        ['deposit', 'refund', 'adjustment'].contains(transactionType);
+    final delta = isCredit ? amountInt : -amountInt;
+
     await conn.execute(
-      'INSERT INTO wallet_ledger '
-      '(id, wallet_id, transaction_type, amount, balance_before, balance_after, '
-      'reference_type, reference_id, notes, created_by) '
-      'VALUES (${uuidParam('id')}, ${uuidParam('walletId')}, :type, :amount, '
-      ':balanceBefore, :balanceAfter, :refType, '
-      "${referenceId != null ? uuidParam('refId') : 'NULL'}, "
-      ':notes, ${createdBy != null ? uuidParam('createdBy') : 'NULL'})',
+      'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+      "VALUES (UNHEX(REPLACE(:entryId, '-', '')), "
+      "UNHEX(REPLACE(:walletId, '-', '')), "
+      ':type, :amount)',
       {
-        'id': entryId,
+        'entryId': entryId,
         'walletId': walletId,
         'type': transactionType,
-        'amount': amount,
-        'balanceBefore': balanceBefore,
-        'balanceAfter': balanceAfter,
-        'refType': referenceType,
-        if (referenceId != null) 'refId': referenceId,
-        'notes': notes,
-        if (createdBy != null) 'createdBy': createdBy,
+        'amount': amountInt,
       },
     );
+
+    await conn.execute(
+      'UPDATE wallets '
+      'SET balance_shillings = balance_shillings + :delta, '
+      '    last_activity_at = NOW() '
+      "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
+      {'delta': delta, 'walletId': walletId},
+    );
   }
+
+  // ── Public transaction (deposit / deduction / etc.) ───────────────────────
 
   Future<Map<String, dynamic>> createTransaction({
     required String walletId,
@@ -141,7 +146,6 @@ class WalletRepository {
     if (wallet == null) throw ApiError.notFound('Wallet not found');
 
     final balance = double.parse(wallet['balance']?.toString() ?? '0');
-
     if (['deduction', 'debt_created'].contains(transactionType) &&
         balance < amount) {
       throw ApiError.businessRule('Insufficient wallet balance');
@@ -156,47 +160,42 @@ class WalletRepository {
         walletId: walletId,
         transactionType: transactionType,
         amount: amount,
-        balanceBefore: balance,
-        createdBy: createdBy,
-        notes: notes,
       );
 
+      // Audit log — uses correct schema columns.
       await conn.execute(
-        'INSERT INTO audit_log (id, user_id, action, target_type, target_id, details_json) '
-        'VALUES (${uuidParam('auditId')}, ${uuidParam('userId')}, :action, :targetType, :targetId, :details)',
+        'INSERT INTO audit_log '
+        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
+        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
+        "UNHEX(REPLACE(:actorId, '-', '')), "
+        ':actionType, :entityType, '
+        "UNHEX(REPLACE(:entityId, '-', '')), :requestId)",
         {
           'auditId': generateUuid(),
-          'userId': createdBy,
-          'action': 'WALLET_TRANSACTION',
-          'targetType': 'wallet',
-          'targetId': walletId,
-          'details': '{"type":"$transactionType","amount":$amount}',
+          'actorId': createdBy,
+          'actionType': 'WALLET_TRANSACTION',
+          'entityType': 'wallet',
+          'entityId': walletId,
+          'requestId': generateUuid(),
         },
       );
     });
 
-    // Return the created ledger entry
+    // Return the created ledger entry.
     final result = await _pool.execute(
       'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(id),1,8),'-',SUBSTR(HEX(id),9,4),'-',SUBSTR(HEX(id),13,4),'-',SUBSTR(HEX(id),17,4),'-',SUBSTR(HEX(id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
-      'transaction_type, amount, balance_before, balance_after, notes, created_at '
-      'FROM wallet_ledger WHERE ${uuidWhere('id', 'id')} LIMIT 1',
+      "LOWER(CONCAT(SUBSTR(HEX(ledger_id),1,8),'-',SUBSTR(HEX(ledger_id),9,4),'-',"
+      "SUBSTR(HEX(ledger_id),13,4),'-',SUBSTR(HEX(ledger_id),17,4),'-',"
+      "SUBSTR(HEX(ledger_id),21))) AS id, "
+      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
+      "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
+      "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
+      'type AS transaction_type, amount_shillings AS amount, status, created_at '
+      'FROM wallet_ledger '
+      "WHERE ledger_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': entryId},
     );
-
     return _rowToMap(result.rows.first);
-  }
-
-  double _calculateNewBalance(
-    double current,
-    String type,
-    double amount,
-  ) {
-    if (['deposit', 'refund', 'adjustment'].contains(type)) {
-      return current + amount;
-    }
-    return current - amount;
   }
 
   Map<String, dynamic> _rowToMap(ResultSetRow row) =>

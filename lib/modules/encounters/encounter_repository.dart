@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
@@ -7,9 +6,23 @@ class EncounterRepository {
 
   EncounterRepository(this._pool);
 
+  // ── DB column reality ─────────────────────────────────────────────────────
+  // encounters:           encounter_id (PK), patient_id, dependent_id,
+  //                       reference_number, service_id, service_type,
+  //                       status, total_cost, visited_at, created_at
+  // encounter_services:   id (PK), encounter_id, service_id, service_name,
+  //                       price, quantity
+  // encounter_medications: id (PK), encounter_id, medication_id, drug_id,
+  //                        dosage_instructions, quantity, rate, medication_name
+  // ─────────────────────────────────────────────────────────────────────────
+
   static const _uuidCols =
-      "LOWER(CONCAT(SUBSTR(HEX(e.id),1,8),'-',SUBSTR(HEX(e.id),9,4),'-',SUBSTR(HEX(e.id),13,4),'-',SUBSTR(HEX(e.id),17,4),'-',SUBSTR(HEX(e.id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(e.patient_id),1,8),'-',SUBSTR(HEX(e.patient_id),9,4),'-',SUBSTR(HEX(e.patient_id),13,4),'-',SUBSTR(HEX(e.patient_id),17,4),'-',SUBSTR(HEX(e.patient_id),21))) AS patient_id";
+      "LOWER(CONCAT(SUBSTR(HEX(e.encounter_id),1,8),'-',SUBSTR(HEX(e.encounter_id),9,4),'-',"
+      "SUBSTR(HEX(e.encounter_id),13,4),'-',SUBSTR(HEX(e.encounter_id),17,4),'-',"
+      "SUBSTR(HEX(e.encounter_id),21))) AS id, "
+      "LOWER(CONCAT(SUBSTR(HEX(e.patient_id),1,8),'-',SUBSTR(HEX(e.patient_id),9,4),'-',"
+      "SUBSTR(HEX(e.patient_id),13,4),'-',SUBSTR(HEX(e.patient_id),17,4),'-',"
+      "SUBSTR(HEX(e.patient_id),21))) AS patient_id";
 
   Future<(List<Map<String, dynamic>>, int)> findAll({
     int limit = 20,
@@ -31,11 +44,11 @@ class EncounterRepository {
       params['status'] = status;
     }
     if (dateFrom != null) {
-      conditions.add('e.encounter_date >= :dateFrom');
+      conditions.add('e.visited_at >= :dateFrom');
       params['dateFrom'] = dateFrom;
     }
     if (dateTo != null) {
-      conditions.add('e.encounter_date <= :dateTo');
+      conditions.add('e.visited_at <= :dateTo');
       params['dateTo'] = dateTo;
     }
 
@@ -48,48 +61,52 @@ class EncounterRepository {
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      'SELECT $_uuidCols, e.encounter_number, e.encounter_date, e.encounter_type, '
-      'e.provider, e.notes, e.status, e.total_amount, e.created_at, e.updated_at '
+      'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
+      'e.status, e.total_cost, e.created_at '
       'FROM encounters e $where '
-      'ORDER BY e.encounter_date DESC LIMIT :limit OFFSET :offset',
+      'ORDER BY e.visited_at DESC LIMIT :limit OFFSET :offset',
       params,
     );
-
     return (result.rows.map(_rowToMap).toList(), total);
   }
 
   Future<Map<String, dynamic>?> findById(String id) async {
     final result = await _pool.execute(
-      'SELECT $_uuidCols, e.encounter_number, e.encounter_date, e.encounter_type, '
-      'e.provider, e.notes, e.status, e.total_amount, e.created_at, e.updated_at '
+      'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
+      'e.status, e.total_cost, e.created_at '
       'FROM encounters e '
-      "WHERE e.id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
+      "WHERE e.encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
 
     final encounter = _rowToMap(result.rows.first);
 
-    // Fetch services
+    // Fetch services (service_name is denormalised on the row).
     final services = await _pool.execute(
       'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(es.id),1,8),'-',SUBSTR(HEX(es.id),9,4),'-',SUBSTR(HEX(es.id),13,4),'-',SUBSTR(HEX(es.id),17,4),'-',SUBSTR(HEX(es.id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(es.catalog_item_id),1,8),'-',SUBSTR(HEX(es.catalog_item_id),9,4),'-',SUBSTR(HEX(es.catalog_item_id),13,4),'-',SUBSTR(HEX(es.catalog_item_id),17,4),'-',SUBSTR(HEX(es.catalog_item_id),21))) AS catalog_item_id, "
-      'ci.name, es.quantity, es.unit_price, es.total_price, es.notes '
+      "LOWER(CONCAT(SUBSTR(HEX(es.id),1,8),'-',SUBSTR(HEX(es.id),9,4),'-',"
+      "SUBSTR(HEX(es.id),13,4),'-',SUBSTR(HEX(es.id),17,4),'-',"
+      "SUBSTR(HEX(es.id),21))) AS id, "
+      "LOWER(CONCAT(SUBSTR(HEX(es.service_id),1,8),'-',SUBSTR(HEX(es.service_id),9,4),'-',"
+      "SUBSTR(HEX(es.service_id),13,4),'-',SUBSTR(HEX(es.service_id),17,4),'-',"
+      "SUBSTR(HEX(es.service_id),21))) AS service_id, "
+      'es.service_name AS name, es.quantity, es.price AS unit_price, es.price AS total_price '
       'FROM encounter_services es '
-      'JOIN catalog_items ci ON es.catalog_item_id = ci.id '
       "WHERE es.encounter_id = UNHEX(REPLACE(:id, '-', ''))",
       {'id': id},
     );
 
-    // Fetch medications
+    // Fetch medications (medication_name is denormalised on the row).
     final medications = await _pool.execute(
       'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(em.id),1,8),'-',SUBSTR(HEX(em.id),9,4),'-',SUBSTR(HEX(em.id),13,4),'-',SUBSTR(HEX(em.id),17,4),'-',SUBSTR(HEX(em.id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(em.catalog_item_id),1,8),'-',SUBSTR(HEX(em.catalog_item_id),9,4),'-',SUBSTR(HEX(em.catalog_item_id),13,4),'-',SUBSTR(HEX(em.catalog_item_id),17,4),'-',SUBSTR(HEX(em.catalog_item_id),21))) AS catalog_item_id, "
-      'ci.name, em.quantity, em.unit_price, em.total_price, em.dosage_instructions, em.notes '
+      "LOWER(CONCAT(SUBSTR(HEX(em.id),1,8),'-',SUBSTR(HEX(em.id),9,4),'-',"
+      "SUBSTR(HEX(em.id),13,4),'-',SUBSTR(HEX(em.id),17,4),'-',"
+      "SUBSTR(HEX(em.id),21))) AS id, "
+      'em.medication_name AS name, em.quantity, '
+      'em.rate AS unit_price, em.rate AS total_price, '
+      'em.dosage_instructions '
       'FROM encounter_medications em '
-      'JOIN catalog_items ci ON em.catalog_item_id = ci.id '
       "WHERE em.encounter_id = UNHEX(REPLACE(:id, '-', ''))",
       {'id': id},
     );
@@ -100,122 +117,127 @@ class EncounterRepository {
   }
 
   /// Atomic encounter creation: inserts encounter, services, medications,
-  /// deducts wallet, and writes audit — all in one transaction.
+  /// deducts wallet ledger, updates wallet balance, writes audit — one tx.
   Future<Map<String, dynamic>> create({
     required String encounterId,
     required String patientId,
     required String walletId,
-    required double totalAmount,
-    required double walletBalanceBefore,
+    required double totalCost,
     required String createdBy,
     required List<Map<String, dynamic>> services,
     required List<Map<String, dynamic>> medications,
-    String? encounterNumber,
-    String? encounterType,
-    String? provider,
-    String? notes,
-    String? encounterDate,
+    String? referenceNumber,
+    String? serviceType,
+    String? visitedAt,
   }) async {
+    final totalCostInt = totalCost.round();
     final ledgerEntryId = generateUuid();
 
     await _pool.transactional((conn) async {
-      // 1. Insert encounter
+      // 1. Insert encounter.
       await conn.execute(
         'INSERT INTO encounters '
-        '(id, patient_id, encounter_number, encounter_date, encounter_type, provider, notes, total_amount, wallet_ledger_id, created_by) '
-        'VALUES (${uuidParam('id')}, ${uuidParam('patientId')}, :encounterNumber, '
-        ':encounterDate, :encounterType, :provider, :notes, :totalAmount, '
-        '${uuidParam('ledgerId')}, ${uuidParam('createdBy')})',
+        '(encounter_id, patient_id, reference_number, visited_at, service_type, '
+        'total_cost) '
+        "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), "
+        ':referenceNumber, :visitedAt, :serviceType, :totalCost)',
         {
           'id': encounterId,
           'patientId': patientId,
-          'encounterNumber': encounterNumber,
-          'encounterDate': encounterDate ?? _nowString(),
-          'encounterType': encounterType,
-          'provider': provider,
-          'notes': notes,
-          'totalAmount': totalAmount,
-          'ledgerId': ledgerEntryId,
-          'createdBy': createdBy,
+          'referenceNumber': referenceNumber,
+          'visitedAt': visitedAt ?? _nowString(),
+          'serviceType': serviceType,
+          'totalCost': totalCost,
         },
       );
 
-      // 2. Insert services
+      // 2. Insert services.
       for (final svc in services) {
         await conn.execute(
           'INSERT INTO encounter_services '
-          '(id, encounter_id, catalog_item_id, quantity, unit_price, total_price, notes) '
-          'VALUES (${uuidParam('id')}, ${uuidParam('encId')}, ${uuidParam('itemId')}, '
-          ':qty, :unitPrice, :totalPrice, :notes)',
+          '(id, encounter_id, service_id, service_name, price, quantity) '
+          "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:encId, '-', '')), "
+          "UNHEX(REPLACE(:serviceId, '-', '')), :serviceName, :price, :qty)",
           {
             'id': generateUuid(),
             'encId': encounterId,
-            'itemId': svc['catalog_item_id'],
+            'serviceId': svc['catalog_item_id'] as String? ??
+                svc['service_id'] as String? ??
+                '00000000-0000-0000-0000-000000000000',
+            'serviceName': svc['service_name'] as String? ??
+                svc['name'] as String? ??
+                '',
+            'price': (svc['unit_price'] as num?)?.toDouble() ??
+                (svc['price'] as num?)?.toDouble() ??
+                0.0,
             'qty': svc['quantity'] ?? 1,
-            'unitPrice': svc['unit_price'],
-            'totalPrice': svc['total_price'],
-            'notes': svc['notes'],
           },
         );
       }
 
-      // 3. Insert medications
+      // 3. Insert medications (stored in medication_id BINARY(16), not drug_id INT).
       for (final med in medications) {
+        final medId = med['catalog_item_id'] as String? ??
+            med['medication_id'] as String?;
         await conn.execute(
           'INSERT INTO encounter_medications '
-          '(id, encounter_id, catalog_item_id, quantity, unit_price, total_price, dosage_instructions, notes) '
-          'VALUES (${uuidParam('id')}, ${uuidParam('encId')}, ${uuidParam('itemId')}, '
-          ':qty, :unitPrice, :totalPrice, :dosage, :notes)',
+          '(id, encounter_id, medication_id, dosage_instructions, quantity, '
+          'rate, medication_name) '
+          "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:encId, '-', '')), "
+          "${medId != null ? "UNHEX(REPLACE(:medId, '-', ''))" : 'NULL'}, "
+          ':dosage, :qty, :rate, :medName)',
           {
             'id': generateUuid(),
             'encId': encounterId,
-            'itemId': med['catalog_item_id'],
-            'qty': med['quantity'] ?? 1,
-            'unitPrice': med['unit_price'],
-            'totalPrice': med['total_price'],
+            if (medId != null) 'medId': medId,
             'dosage': med['dosage_instructions'],
-            'notes': med['notes'],
+            'qty': med['quantity'] ?? 1,
+            'rate': (med['unit_price'] as num?)?.toDouble() ??
+                (med['rate'] as num?)?.toDouble() ??
+                0.0,
+            'medName': med['medication_name'] as String? ??
+                med['name'] as String? ??
+                '',
           },
         );
       }
 
-      // 4. Deduct from wallet ledger (append-only)
-      final balanceAfter = walletBalanceBefore - totalAmount;
+      // 4. Append wallet ledger entry (deduction).
       await conn.execute(
-        'INSERT INTO wallet_ledger '
-        '(id, wallet_id, transaction_type, amount, balance_before, balance_after, '
-        'reference_type, reference_id, notes, created_by) '
-        'VALUES (${uuidParam('ledgerId')}, ${uuidParam('walletId')}, :type, :amount, '
-        ':balBefore, :balAfter, :refType, ${uuidParam('refId')}, :notes, ${uuidParam('createdBy')})',
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+        "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), "
+        "UNHEX(REPLACE(:walletId, '-', '')), 'deduction', :amount)",
         {
           'ledgerId': ledgerEntryId,
           'walletId': walletId,
-          'type': 'deduction',
-          'amount': totalAmount,
-          'balBefore': walletBalanceBefore,
-          'balAfter': balanceAfter,
-          'refType': 'encounter',
-          'refId': encounterId,
-          'notes': 'Encounter billing',
-          'createdBy': createdBy,
+          'amount': totalCostInt,
         },
       );
 
-      // 5. Audit log
+      // 5. Update wallet balance (denormalised).
       await conn.execute(
-        'INSERT INTO audit_log (id, user_id, action, target_type, target_id, details_json) '
-        'VALUES (${uuidParam('auditId')}, ${uuidParam('userId')}, :action, :targetType, :targetId, :details)',
+        'UPDATE wallets '
+        'SET balance_shillings = balance_shillings - :amount, '
+        '    last_activity_at = NOW() '
+        "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
+        {'amount': totalCostInt, 'walletId': walletId},
+      );
+
+      // 6. Audit log — correct schema.
+      await conn.execute(
+        'INSERT INTO audit_log '
+        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
+        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
+        "UNHEX(REPLACE(:actorId, '-', '')), "
+        ':actionType, :entityType, '
+        "UNHEX(REPLACE(:entityId, '-', '')), :requestId)",
         {
           'auditId': generateUuid(),
-          'userId': createdBy,
-          'action': 'CREATE',
-          'targetType': 'encounter',
-          'targetId': encounterId,
-          'details': jsonEncode({
-            'total_amount': totalAmount,
-            'services_count': services.length,
-            'medications_count': medications.length,
-          }),
+          'actorId': createdBy,
+          'actionType': 'CREATE_ENCOUNTER',
+          'entityType': 'encounter',
+          'entityId': encounterId,
+          'requestId': generateUuid(),
         },
       );
     });
@@ -228,10 +250,16 @@ class EncounterRepository {
     Map<String, dynamic> fields,
     String updatedBy,
   ) async {
-    final allowed = ['provider', 'notes', 'status', 'encounter_type'];
+    // Map API field names to DB columns.
+    const colMap = {
+      'service_type': 'service_type',
+      'encounter_type': 'service_type', // legacy alias accepted
+      'status': 'status',
+    };
+
     final setClauses = fields.keys
-        .where(allowed.contains)
-        .map((k) => '$k = :$k')
+        .where(colMap.containsKey)
+        .map((k) => '${colMap[k]} = :$k')
         .join(', ');
 
     if (setClauses.isEmpty) return findById(id);
@@ -240,19 +268,24 @@ class EncounterRepository {
 
     await _pool.transactional((conn) async {
       await conn.execute(
-        'UPDATE encounters SET $setClauses, updated_at = NOW() '
-        "WHERE id = UNHEX(REPLACE(:id, '-', ''))",
+        'UPDATE encounters SET $setClauses '
+        "WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
         params,
       );
       await conn.execute(
-        'INSERT INTO audit_log (id, user_id, action, target_type, target_id) '
-        'VALUES (${uuidParam('auditId')}, ${uuidParam('userId')}, :action, :targetType, :targetId)',
+        'INSERT INTO audit_log '
+        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
+        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
+        "UNHEX(REPLACE(:actorId, '-', '')), "
+        ':actionType, :entityType, '
+        "UNHEX(REPLACE(:entityId, '-', '')), :requestId)",
         {
           'auditId': generateUuid(),
-          'userId': updatedBy,
-          'action': 'UPDATE',
-          'targetType': 'encounter',
-          'targetId': id,
+          'actorId': updatedBy,
+          'actionType': 'UPDATE_ENCOUNTER',
+          'entityType': 'encounter',
+          'entityId': id,
+          'requestId': generateUuid(),
         },
       );
     });
@@ -263,19 +296,24 @@ class EncounterRepository {
   Future<void> delete(String id, String deletedBy) async {
     await _pool.transactional((conn) async {
       await conn.execute(
-        'UPDATE encounters SET status = \'cancelled\', updated_at = NOW() '
-        "WHERE id = UNHEX(REPLACE(:id, '-', ''))",
+        "UPDATE encounters SET status = 'cancelled' "
+        "WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
         {'id': id},
       );
       await conn.execute(
-        'INSERT INTO audit_log (id, user_id, action, target_type, target_id) '
-        'VALUES (${uuidParam('auditId')}, ${uuidParam('userId')}, :action, :targetType, :targetId)',
+        'INSERT INTO audit_log '
+        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
+        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
+        "UNHEX(REPLACE(:actorId, '-', '')), "
+        ':actionType, :entityType, '
+        "UNHEX(REPLACE(:entityId, '-', '')), :requestId)",
         {
           'auditId': generateUuid(),
-          'userId': deletedBy,
-          'action': 'DELETE',
-          'targetType': 'encounter',
-          'targetId': id,
+          'actorId': deletedBy,
+          'actionType': 'CANCEL_ENCOUNTER',
+          'entityType': 'encounter',
+          'entityId': id,
+          'requestId': generateUuid(),
         },
       );
     });

@@ -18,16 +18,16 @@ class AnalyticsRepository {
         {'from': from, 'to': to},
       ),
       _count(
-        'SELECT COUNT(*) as val FROM encounters WHERE encounter_date BETWEEN :from AND :to',
+        'SELECT COUNT(*) as val FROM encounters WHERE visited_at BETWEEN :from AND :to',
         {'from': from, 'to': to},
       ),
       _sum(
-        'SELECT COALESCE(SUM(total_amount), 0) as val FROM encounters WHERE encounter_date BETWEEN :from AND :to',
+        'SELECT COALESCE(SUM(total_cost), 0) as val FROM encounters WHERE visited_at BETWEEN :from AND :to',
         {'from': from, 'to': to},
       ),
       _sum(
-        'SELECT COALESCE(SUM(amount), 0) as val FROM wallet_ledger '
-        'WHERE transaction_type = \'deposit\' AND created_at BETWEEN :from AND :to',
+        "SELECT COALESCE(SUM(amount_shillings), 0) as val FROM wallet_ledger "
+        "WHERE type = 'deposit' AND created_at BETWEEN :from AND :to",
         {'from': from, 'to': to},
       ),
       _count(
@@ -35,7 +35,7 @@ class AnalyticsRepository {
         {},
       ),
       _count(
-        'SELECT COUNT(*) as val FROM encounters WHERE status = \'open\'',
+        "SELECT COUNT(*) as val FROM encounters WHERE status != 'cancelled'",
         {},
       ),
     ]);
@@ -66,11 +66,11 @@ class AnalyticsRepository {
     };
 
     final result = await _pool.execute(
-      'SELECT DATE_FORMAT(encounter_date, :format) as period, '
+      'SELECT DATE_FORMAT(visited_at, :format) as period, '
       'COUNT(*) as encounter_count, '
-      'COALESCE(SUM(total_amount), 0) as total_billed '
+      'COALESCE(SUM(total_cost), 0) as total_billed '
       'FROM encounters '
-      'WHERE encounter_date BETWEEN :from AND :to '
+      'WHERE visited_at BETWEEN :from AND :to '
       'GROUP BY period ORDER BY period ASC',
       {'format': dateFormat, 'from': from, 'to': to},
     );
@@ -98,14 +98,14 @@ class AnalyticsRepository {
     final kpis = await getKpis(dateFrom: from, dateTo: to);
     final trend = await getVisitTrend(dateFrom: from, dateTo: to);
 
+    // Use denormalized service_name from encounter_services — no catalog JOIN.
     final topServices = await _pool.execute(
-      'SELECT ci.name, ci.category, COUNT(*) as count, '
-      'COALESCE(SUM(es.total_price), 0) as total_revenue '
+      'SELECT es.service_name AS name, COUNT(*) as count, '
+      'COALESCE(SUM(es.price * es.quantity), 0) as total_revenue '
       'FROM encounter_services es '
-      'JOIN catalog_items ci ON es.catalog_item_id = ci.id '
-      'JOIN encounters e ON es.encounter_id = e.id '
-      'WHERE e.encounter_date BETWEEN :from AND :to '
-      'GROUP BY ci.id, ci.name, ci.category '
+      'JOIN encounters e ON es.encounter_id = e.encounter_id '
+      'WHERE e.visited_at BETWEEN :from AND :to '
+      'GROUP BY es.service_name '
       'ORDER BY count DESC LIMIT 10',
       {'from': from, 'to': to},
     );
@@ -128,13 +128,15 @@ class AnalyticsRepository {
   ) async {
     final result = await _pool.execute(
       'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(e.id),1,8),'-',SUBSTR(HEX(e.id),9,4),'-',SUBSTR(HEX(e.id),13,4),'-',SUBSTR(HEX(e.id),17,4),'-',SUBSTR(HEX(e.id),21))) AS id, "
-      'e.encounter_number, e.encounter_date, e.encounter_type, e.status, e.total_amount, '
-      'CONCAT(p.first_name, \' \', p.last_name) as patient_name, p.patient_number '
+      "LOWER(CONCAT(SUBSTR(HEX(e.encounter_id),1,8),'-',SUBSTR(HEX(e.encounter_id),9,4),'-',"
+      "SUBSTR(HEX(e.encounter_id),13,4),'-',SUBSTR(HEX(e.encounter_id),17,4),'-',"
+      "SUBSTR(HEX(e.encounter_id),21))) AS id, "
+      'e.reference_number, e.visited_at, e.service_type, e.status, e.total_cost, '
+      'p.full_name as patient_name, p.patient_code '
       'FROM encounters e '
-      'JOIN patients p ON e.patient_id = p.id '
-      'WHERE e.encounter_date BETWEEN :from AND :to '
-      'ORDER BY e.encounter_date DESC',
+      'JOIN patients p ON e.patient_id = p.patient_id '
+      'WHERE e.visited_at BETWEEN :from AND :to '
+      'ORDER BY e.visited_at DESC',
       {'from': from, 'to': to},
     );
 
@@ -151,11 +153,11 @@ class AnalyticsRepository {
     String to,
   ) async {
     final ledger = await _pool.execute(
-      'SELECT transaction_type, COUNT(*) as count, '
-      'COALESCE(SUM(amount), 0) as total '
+      'SELECT type AS transaction_type, COUNT(*) as count, '
+      'COALESCE(SUM(amount_shillings), 0) as total '
       'FROM wallet_ledger '
       'WHERE created_at BETWEEN :from AND :to '
-      'GROUP BY transaction_type',
+      'GROUP BY type',
       {'from': from, 'to': to},
     );
 

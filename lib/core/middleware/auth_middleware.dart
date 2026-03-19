@@ -20,7 +20,7 @@ class AuthUser {
     required this.username,
   });
 
-  bool get isAdmin => role == 'admin';
+  bool get isAdmin => role.toLowerCase() == 'admin';
 }
 
 /// Verifies the JWT Bearer token and attaches [AuthUser] to the request context.

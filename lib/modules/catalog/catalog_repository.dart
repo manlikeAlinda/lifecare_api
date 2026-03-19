@@ -5,13 +5,40 @@ class CatalogRepository {
 
   CatalogRepository(this._pool);
 
+  // ── DB column reality ─────────────────────────────────────────────────────
+  // catalog_items:         catalog_item_id (PK), item_code, item_name,
+  //                        item_type ('SERVICE'|'MEDICATION'|'LAB'|'PROCEDURE'),
+  //                        is_lifecare_eligible, is_consultation, is_active,
+  //                        created_at
+  // catalog_price_versions: price_version_id (PK), catalog_item_id,
+  //                         price_minor (bigint), active_from, created_by,
+  //                         created_at, prev_price_version_id
+  // drugs (legacy):        drug_id (INT PK), drug_name, drug_type, rate,
+  //                        currency, is_active, created_at, updated_at
+  // ─────────────────────────────────────────────────────────────────────────
+
   static const _uuidId =
-      "LOWER(CONCAT(SUBSTR(HEX(ci.id),1,8),'-',SUBSTR(HEX(ci.id),9,4),'-',SUBSTR(HEX(ci.id),13,4),'-',SUBSTR(HEX(ci.id),17,4),'-',SUBSTR(HEX(ci.id),21))) AS id";
+      "LOWER(CONCAT(SUBSTR(HEX(ci.catalog_item_id),1,8),'-',"
+      "SUBSTR(HEX(ci.catalog_item_id),9,4),'-',"
+      "SUBSTR(HEX(ci.catalog_item_id),13,4),'-',"
+      "SUBSTR(HEX(ci.catalog_item_id),17,4),'-',"
+      "SUBSTR(HEX(ci.catalog_item_id),21))) AS id";
+
+  // Latest active price for each item via correlated subquery.
+  static const _priceJoin =
+      'LEFT JOIN catalog_price_versions cpv '
+      '  ON cpv.catalog_item_id = ci.catalog_item_id '
+      '  AND cpv.active_from = ('
+      '    SELECT MAX(active_from) FROM catalog_price_versions p2 '
+      '    WHERE p2.catalog_item_id = ci.catalog_item_id '
+      '    AND p2.active_from <= NOW()'
+      '  )';
 
   static const _baseSelect =
-      'SELECT $_uuidId, ci.code, ci.name, ci.category, ci.unit, ci.price, '
-      'ci.item_type, ci.description, ci.is_active, ci.created_at, ci.updated_at '
-      'FROM catalog_items ci';
+      'SELECT $_uuidId, ci.item_code AS code, ci.item_name AS name, '
+      'ci.item_type, ci.is_lifecare_eligible, ci.is_consultation, '
+      'ci.is_active, ci.created_at, cpv.price_minor AS price '
+      'FROM catalog_items ci $_priceJoin';
 
   Future<(List<Map<String, dynamic>>, int)> findServices({
     int limit = 20,
@@ -19,7 +46,12 @@ class CatalogRepository {
     String? category,
     String? search,
   }) async {
-    return _findByType('service', limit: limit, offset: offset, category: category, search: search);
+    return _findByTypes(
+      ["'SERVICE'", "'LAB'", "'PROCEDURE'"],
+      limit: limit,
+      offset: offset,
+      search: search,
+    );
   }
 
   Future<(List<Map<String, dynamic>>, int)> findDrugs({
@@ -28,34 +60,27 @@ class CatalogRepository {
     String? category,
     String? search,
   }) async {
-    final conditions = ['ci.item_type = \'drug\'', 'ci.is_active = 1'];
+    // drugs is a standalone legacy table — not linked to catalog_items.
+    final conditions = ['is_active = 1'];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
 
-    if (category != null) {
-      conditions.add('ci.category = :category');
-      params['category'] = category;
-    }
     if (search != null && search.isNotEmpty) {
-      conditions.add('(ci.name LIKE :search OR ci.code LIKE :search OR d.generic_name LIKE :search OR d.brand_name LIKE :search)');
+      conditions.add('drug_name LIKE :search');
       params['search'] = '%$search%';
     }
 
     final where = 'WHERE ${conditions.join(' AND ')}';
 
     final countResult = await _pool.execute(
-      'SELECT COUNT(*) as total FROM catalog_items ci '
-      'LEFT JOIN drugs d ON ci.id = d.catalog_item_id $where',
+      'SELECT COUNT(*) as total FROM drugs $where',
       params,
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      'SELECT $_uuidId, ci.code, ci.name, ci.category, ci.unit, ci.price, '
-      'ci.item_type, ci.description, ci.is_active, ci.created_at, ci.updated_at, '
-      'd.generic_name, d.brand_name, d.dosage_form, d.strength '
-      'FROM catalog_items ci '
-      'LEFT JOIN drugs d ON ci.id = d.catalog_item_id '
-      '$where ORDER BY ci.name LIMIT :limit OFFSET :offset',
+      'SELECT drug_id AS id, drug_name AS name, drug_type, '
+      'rate AS price, currency, is_active, created_at, updated_at '
+      'FROM drugs $where ORDER BY drug_name LIMIT :limit OFFSET :offset',
       params,
     );
 
@@ -74,14 +99,10 @@ class CatalogRepository {
 
     if (type != null) {
       conditions.add('ci.item_type = :type');
-      params['type'] = type;
-    }
-    if (category != null) {
-      conditions.add('ci.category = :category');
-      params['category'] = category;
+      params['type'] = type.toUpperCase();
     }
     if (search != null && search.isNotEmpty) {
-      conditions.add('(ci.name LIKE :search OR ci.code LIKE :search)');
+      conditions.add('(ci.item_name LIKE :search OR ci.item_code LIKE :search)');
       params['search'] = '%$search%';
     }
 
@@ -94,7 +115,8 @@ class CatalogRepository {
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      '$_baseSelect $where ORDER BY ci.item_type, ci.category, ci.name LIMIT :limit OFFSET :offset',
+      '$_baseSelect $where '
+      'ORDER BY ci.item_type, ci.item_name LIMIT :limit OFFSET :offset',
       params,
     );
 
@@ -103,34 +125,26 @@ class CatalogRepository {
 
   Future<Map<String, dynamic>?> findById(String id) async {
     final result = await _pool.execute(
-      'SELECT $_uuidId, ci.code, ci.name, ci.category, ci.unit, ci.price, '
-      'ci.item_type, ci.description, ci.is_active, ci.created_at, ci.updated_at, '
-      'd.generic_name, d.brand_name, d.dosage_form, d.strength '
-      'FROM catalog_items ci '
-      'LEFT JOIN drugs d ON ci.id = d.catalog_item_id '
-      "WHERE ci.id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
+      '$_baseSelect '
+      "WHERE ci.catalog_item_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
     return _rowToMap(result.rows.first);
   }
 
-  Future<(List<Map<String, dynamic>>, int)> _findByType(
-    String type, {
+  Future<(List<Map<String, dynamic>>, int)> _findByTypes(
+    List<String> types, {
     required int limit,
     required int offset,
-    String? category,
     String? search,
   }) async {
-    final conditions = ["ci.item_type = '$type'", 'ci.is_active = 1'];
+    final typeList = types.join(', ');
+    final conditions = ['ci.item_type IN ($typeList)', 'ci.is_active = 1'];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
 
-    if (category != null) {
-      conditions.add('ci.category = :category');
-      params['category'] = category;
-    }
     if (search != null && search.isNotEmpty) {
-      conditions.add('(ci.name LIKE :search OR ci.code LIKE :search)');
+      conditions.add('(ci.item_name LIKE :search OR ci.item_code LIKE :search)');
       params['search'] = '%$search%';
     }
 
@@ -143,7 +157,7 @@ class CatalogRepository {
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      '$_baseSelect $where ORDER BY ci.category, ci.name LIMIT :limit OFFSET :offset',
+      '$_baseSelect $where ORDER BY ci.item_name LIMIT :limit OFFSET :offset',
       params,
     );
 
