@@ -25,7 +25,7 @@ class AuthService {
     }
     if (user == null) throw ApiError.unauthenticated('Invalid credentials');
 
-    if (user['is_active'] == '0' || user['is_active'] == false) {
+    if (user['is_active'] == false) {
       throw ApiError.forbidden('Account is inactive');
     }
 
@@ -68,7 +68,7 @@ class AuthService {
       throw ApiError.unauthenticated('Invalid or expired refresh token');
     }
 
-    if (session['is_active'] == '0' || session['is_active'] == false) {
+    if (session['is_active'] == false) {
       throw ApiError.forbidden('Account is inactive');
     }
 
