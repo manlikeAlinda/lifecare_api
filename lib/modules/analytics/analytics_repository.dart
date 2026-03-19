@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/utils/row_map.dart';
 
 class AnalyticsRepository {
   final MySQLConnectionPool _pool;
@@ -75,7 +76,7 @@ class AnalyticsRepository {
       {'format': dateFormat, 'from': from, 'to': to},
     );
 
-    return result.rows.map((row) => Map<String, dynamic>.from(row.assoc())).toList();
+    return result.rows.map(rowToMap).toList();
   }
 
   Future<Map<String, dynamic>> generateReport(Map<String, dynamic> params) async {
@@ -117,7 +118,7 @@ class AnalyticsRepository {
       'kpis': kpis,
       'visit_trend': trend,
       'top_services': topServices.rows
-          .map((r) => Map<String, dynamic>.from(r.assoc()))
+          .map(rowToMap)
           .toList(),
     };
   }
@@ -166,7 +167,7 @@ class AnalyticsRepository {
       'generated_at': DateTime.now().toIso8601String(),
       'period': {'from': from, 'to': to},
       'ledger_summary': ledger.rows
-          .map((r) => Map<String, dynamic>.from(r.assoc()))
+          .map(rowToMap)
           .toList(),
     };
   }
