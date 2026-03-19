@@ -56,7 +56,7 @@ class EncounterService {
       total += (med['total_price'] as num?)?.toDouble() ?? 0;
     }
 
-    final balance = double.parse(wallet['balance']?.toString() ?? '0');
+    final balance = (wallet['balance'] as num?)?.toDouble() ?? 0;
     if (total > balance) {
       throw ApiError.businessRule(
         'Insufficient wallet balance. Required: $total, Available: $balance',

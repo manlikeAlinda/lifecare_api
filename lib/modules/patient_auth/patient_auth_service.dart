@@ -110,7 +110,7 @@ class PatientAuthService {
     };
 
     final mustChangePw = credential['must_change_pw'];
-    if (mustChangePw == 1 || mustChangePw == '1') {
+    if (mustChangePw == true) {
       response['must_change_password'] = true;
     }
 

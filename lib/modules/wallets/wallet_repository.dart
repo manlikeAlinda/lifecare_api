@@ -146,7 +146,7 @@ class WalletRepository {
     final wallet = await findById(walletId);
     if (wallet == null) throw ApiError.notFound('Wallet not found');
 
-    final balance = double.parse(wallet['balance']?.toString() ?? '0');
+    final balance = (wallet['balance'] as num?)?.toDouble() ?? 0;
     if (['deduction', 'debt_created'].contains(transactionType) &&
         balance < amount) {
       throw ApiError.businessRule('Insufficient wallet balance');
