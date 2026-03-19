@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/utils/row_map.dart';
 
 class AuthRepository {
   final MySQLConnectionPool _pool;
@@ -151,7 +152,7 @@ class AuthRepository {
   }
 
   Map<String, dynamic> _rowToMap(ResultSetRow row) {
-    final map = Map<String, dynamic>.from(row.assoc());
+    final map = rowToMap(row);
     // password_hash is selected as HEX(...) — decode hex back to the ASCII hash string
     final hexHash = map['password_hash'];
     if (hexHash is String && hexHash.isNotEmpty) {

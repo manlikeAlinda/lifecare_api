@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
 class PatientCredentialsRepository {
@@ -119,6 +120,5 @@ class PatientCredentialsRepository {
     }
   }
 
-  Map<String, dynamic> _rowToMap(ResultSetRow row) =>
-      Map<String, dynamic>.from(row.assoc());
+  Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);
 }

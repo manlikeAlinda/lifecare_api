@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
 class PatientAuthRepository {
@@ -153,8 +154,7 @@ class PatientAuthRepository {
     }
   }
 
-  Map<String, dynamic> _rowToMap(ResultSetRow row) =>
-      Map<String, dynamic>.from(row.assoc());
+  Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);
 
   String _formatDateTime(DateTime dt) =>
       dt.toUtc().toString().replaceFirst('Z', '').substring(0, 19);

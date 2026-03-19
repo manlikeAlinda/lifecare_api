@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/utils/row_map.dart';
 
 class CatalogRepository {
   final MySQLConnectionPool _pool;
@@ -164,6 +165,5 @@ class CatalogRepository {
     return (result.rows.map(_rowToMap).toList(), total);
   }
 
-  Map<String, dynamic> _rowToMap(ResultSetRow row) =>
-      Map<String, dynamic>.from(row.assoc());
+  Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);
 }
