@@ -47,6 +47,14 @@ class CatalogService {
         search: search,
       );
 
+  Future<(List<Map<String, dynamic>>, int)> listByCategory(
+    String category, {
+    int limit = 20,
+    int offset = 0,
+    String? search,
+  }) =>
+      _repo.findByCategory(category, limit: limit, offset: offset, search: search);
+
   Future<Map<String, dynamic>> getItem(String id) async {
     final item = await _repo.findById(id);
     if (item == null) throw ApiError.notFound('Catalog item not found');

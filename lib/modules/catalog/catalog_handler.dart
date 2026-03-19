@@ -37,6 +37,20 @@ class CatalogHandler {
     return okListResponse(items, total: total, limit: limit, offset: offset);
   }
 
+  Future<Response> listByCategory(Request request, String category) async {
+    final limit = parseLimit(request);
+    final offset = parseOffset(request);
+    final search = queryParam(request, 'search');
+
+    final (items, total) = await _service.listByCategory(
+      category,
+      limit: limit,
+      offset: offset,
+      search: search,
+    );
+    return okListResponse(items, total: total, limit: limit, offset: offset);
+  }
+
   Future<Response> getById(Request request, String id) async {
     final item = await _service.getItem(id);
     return okResponse(item);
