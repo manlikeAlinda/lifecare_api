@@ -27,18 +27,19 @@ class PatientService {
     final id = generateUuid();
     final walletId = generateUuid();
 
+    // Support both old API (first_name + last_name) and new API (full_name)
+    final fullName = data['full_name'] as String? ??
+        '${data['first_name'] ?? ''} ${data['last_name'] ?? ''}'.trim();
+
     return _repo.create(
       id: id,
       walletId: walletId,
-      firstName: data['first_name'] as String,
-      lastName: data['last_name'] as String,
+      fullName: fullName,
       createdBy: createdBy,
-      patientNumber: data['patient_number'] as String?,
-      dateOfBirth: data['date_of_birth'] as String?,
-      gender: data['gender'] as String?,
-      phone: data['phone'] as String?,
-      email: data['email'] as String?,
-      address: data['address'] as String?,
+      patientCode:
+          data['patient_code'] as String? ?? data['patient_number'] as String?,
+      phone: data['phone'] as String? ?? data['phone_e164'] as String?,
+      accountType: data['account_type'] as String? ?? 'individual',
     );
   }
 
@@ -53,12 +54,18 @@ class PatientService {
     return updated!;
   }
 
+  /// bulkUpdate is no longer supported with the simplified real-DB schema.
   Future<void> bulkUpdatePatients(
     List<Map<String, dynamic>> updates,
     String updatedBy,
   ) async {
     if (updates.isEmpty) return;
-    await _repo.bulkUpdate(updates, updatedBy);
+    for (final u in updates) {
+      final id = u['id'] as String?;
+      if (id == null) continue;
+      final fields = Map<String, dynamic>.from(u)..remove('id');
+      await _repo.update(id, fields, updatedBy);
+    }
   }
 
   Future<void> deletePatient(String id, String deletedBy) async {
@@ -80,13 +87,12 @@ class PatientService {
   ) async {
     await _ensurePatientExists(patientId);
     return _repo.createDependent(
-      id: generateUuid(),
       patientId: patientId,
-      firstName: data['first_name'] as String,
-      lastName: data['last_name'] as String,
-      dateOfBirth: data['date_of_birth'] as String?,
-      gender: data['gender'] as String?,
-      relationship: data['relationship'] as String?,
+      depId: generateUuid(),
+      fullName: data['full_name'] as String,
+      nationalId: data['national_id'] as String? ?? '',
+      relationship: data['relationship'] as String,
+      phoneNumber: data['phone_number'] as String?,
     );
   }
 
@@ -95,16 +101,16 @@ class PatientService {
     String depId,
     Map<String, dynamic> data,
   ) async {
-    final dep = await _repo.findDependent(patientId, depId);
+    final dep = await _repo.findDependentById(depId);
     if (dep == null) throw ApiError.notFound('Dependent not found');
-    final updated = await _repo.updateDependent(patientId, depId, data);
+    final updated = await _repo.updateDependent(depId, data);
     return updated!;
   }
 
   Future<void> deleteDependent(String patientId, String depId) async {
-    final dep = await _repo.findDependent(patientId, depId);
+    final dep = await _repo.findDependentById(depId);
     if (dep == null) throw ApiError.notFound('Dependent not found');
-    await _repo.softDeleteDependent(patientId, depId);
+    await _repo.softDeleteDependent(depId);
   }
 
   Future<void> _ensurePatientExists(String patientId) async {

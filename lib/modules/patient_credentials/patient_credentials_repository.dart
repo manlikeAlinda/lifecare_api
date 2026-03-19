@@ -23,9 +23,9 @@ class PatientCredentialsRepository {
   Future<Map<String, dynamic>?> findPatientById(String patientId) async {
     final result = await _pool.execute(
       'SELECT '
-      '${uuidSelect('id')}, '
-      'patient_number, first_name, last_name, phone, email '
-      'FROM patients WHERE ${uuidWhere('id', 'patientId')} LIMIT 1',
+      '${uuidSelect('patient_id')}, '
+      'patient_code, full_name, phone_e164 '
+      'FROM patients WHERE ${uuidWhere('patient_id', 'patientId')} LIMIT 1',
       {'patientId': patientId},
     );
     if (result.rows.isEmpty) return null;
@@ -101,14 +101,17 @@ class PatientCredentialsRepository {
   }) async {
     try {
       await _pool.execute(
-        'INSERT INTO audit_log (id, user_id, action, target_type, target_id) '
-        'VALUES (${uuidParam('auditId')}, ${uuidParam('actorId')}, :action, :targetType, :targetId)',
+        'INSERT INTO audit_log '
+        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
+        'VALUES (${uuidParam('auditId')}, ${uuidParam('actorId')}, '
+        ':actionType, :entityType, ${uuidParam('entityId')}, :requestId)',
         {
           'auditId': generateUuid(),
           'actorId': actorId,
-          'action': action,
-          'targetType': 'patient_credentials',
-          'targetId': patientId,
+          'actionType': action,
+          'entityType': 'patient_credentials',
+          'entityId': patientId,
+          'requestId': generateUuid(),
         },
       );
     } catch (_) {

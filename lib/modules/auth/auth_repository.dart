@@ -22,7 +22,7 @@ class AuthRepository {
       'SELECT '
       '${_uuidHex('u.user_id', 'id')}, '
       'u.username, u.display_name AS full_name, u.is_active, '
-      'u.password_hash, u.password_alg AS hash_algorithm, '
+      'HEX(u.password_hash) AS password_hash, u.password_alg AS hash_algorithm, '
       'COALESCE(r.role_key, \'staff\') AS role '
       'FROM users u '
       'LEFT JOIN user_roles ur ON ur.user_id = u.user_id '
@@ -39,7 +39,7 @@ class AuthRepository {
       'SELECT '
       '${_uuidHex('u.user_id', 'id')}, '
       'u.username, u.display_name AS full_name, u.is_active, '
-      'u.password_hash, u.password_alg AS hash_algorithm, '
+      'HEX(u.password_hash) AS password_hash, u.password_alg AS hash_algorithm, '
       'COALESCE(r.role_key, \'staff\') AS role '
       'FROM users u '
       'LEFT JOIN user_roles ur ON ur.user_id = u.user_id '
@@ -56,7 +56,7 @@ class AuthRepository {
       'SELECT '
       '${_uuidHex('u.user_id', 'id')}, '
       'u.username, u.display_name AS full_name, u.is_active, '
-      'u.password_hash, u.password_alg AS hash_algorithm, '
+      'HEX(u.password_hash) AS password_hash, u.password_alg AS hash_algorithm, '
       'COALESCE(r.role_key, \'staff\') AS role '
       'FROM users u '
       'LEFT JOIN user_roles ur ON ur.user_id = u.user_id '
@@ -151,12 +151,14 @@ class AuthRepository {
   }
 
   Map<String, dynamic> _rowToMap(ResultSetRow row) {
-    final assoc = row.assoc();
-    // password_hash in real DB is varbinary — convert bytes to hex string if needed
-    final map = Map<String, dynamic>.from(assoc);
-    if (map['password_hash'] is List<int>) {
-      map['password_hash'] =
-          String.fromCharCodes(map['password_hash'] as List<int>);
+    final map = Map<String, dynamic>.from(row.assoc());
+    // password_hash is selected as HEX(...) — decode hex back to the ASCII hash string
+    final hexHash = map['password_hash'];
+    if (hexHash is String && hexHash.isNotEmpty) {
+      map['password_hash'] = String.fromCharCodes(
+        List.generate(hexHash.length ~/ 2,
+            (i) => int.parse(hexHash.substring(i * 2, i * 2 + 2), radix: 16)),
+      );
     }
     return map;
   }
