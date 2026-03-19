@@ -307,6 +307,15 @@ Handler buildApp() {
   router.get('/v1/services', patientAuth.addHandler(catalogHandler.listServices));
   router.get('/v1/drugs', patientAuth.addHandler(catalogHandler.listDrugs));
 
+  // Category-specific service routes (dental, laboratory, imaging, procedures,
+  // laparoscopic, accommodation, consultation)
+  router.get(
+    '/v1/services/<category>',
+    patientAuth.addHandler(
+      (Request req) => catalogHandler.listByCategory(req, req.params['category']!),
+    ),
+  );
+
   // ── Patient Auth (public) ─────────────────────────────────────────────────────
   router.post('/v1/patient-auth/activate', patientAuthHandler.activate);
   router.post('/v1/patient-auth/login', patientAuthHandler.login);

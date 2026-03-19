@@ -55,6 +55,169 @@ class CatalogRepository {
     );
   }
 
+  // ── Category-specific tables (production DB) ──────────────────────────────
+  // Each category lives in its own table with slightly different columns.
+  // We normalise to: id, name, category, rate, currency, is_active, created_at
+
+  Future<(List<Map<String, dynamic>>, int)> findByCategory(
+    String category, {
+    int limit = 20,
+    int offset = 0,
+    String? search,
+  }) async {
+    switch (category.toLowerCase()) {
+      case 'dental':
+        return _queryCategory(
+          table: 'dental_services',
+          pkCol: 'dental_service_id',
+          nameCol: 'procedure_name',
+          categoryCol: 'category',
+          extraCols: '',
+          limit: limit,
+          offset: offset,
+          search: search,
+          searchCol: 'procedure_name',
+        );
+      case 'laboratory':
+        return _queryCategory(
+          table: 'lab_services',
+          pkCol: 'lab_service_id',
+          nameCol: 'service_name',
+          categoryCol: 'category',
+          extraCols: '',
+          limit: limit,
+          offset: offset,
+          search: search,
+          searchCol: 'service_name',
+        );
+      case 'imaging':
+        return _queryCategory(
+          table: 'imaging_services',
+          pkCol: 'imaging_service_id',
+          nameCol: 'test_name',
+          categoryCol: 'modality',
+          extraCols: '',
+          limit: limit,
+          offset: offset,
+          search: search,
+          searchCol: 'test_name',
+        );
+      case 'procedures':
+        return _queryCategory(
+          table: 'procedure_packages',
+          pkCol: 'procedure_package_id',
+          nameCol: 'procedure_name',
+          categoryCol: 'category',
+          extraCols: ', billing_unit',
+          limit: limit,
+          offset: offset,
+          search: search,
+          searchCol: 'procedure_name',
+        );
+      case 'laparoscopic':
+        return _queryCategory(
+          table: 'laparoscopic_procedures',
+          pkCol: 'laparoscopic_procedure_id',
+          nameCol: 'procedure_name',
+          categoryCol: 'category',
+          extraCols: ', billing_unit',
+          limit: limit,
+          offset: offset,
+          search: search,
+          searchCol: 'procedure_name',
+        );
+      case 'accommodation':
+        return _queryCategory(
+          table: 'accommodation_services',
+          pkCol: 'accommodation_service_id',
+          nameCol: 'service_name',
+          categoryCol: 'category',
+          extraCols: ', billing_unit',
+          limit: limit,
+          offset: offset,
+          search: search,
+          searchCol: 'service_name',
+        );
+      case 'consultation':
+        return _queryConsultation(
+          limit: limit,
+          offset: offset,
+          search: search,
+        );
+      default:
+        return (<Map<String, dynamic>>[], 0);
+    }
+  }
+
+  Future<(List<Map<String, dynamic>>, int)> _queryCategory({
+    required String table,
+    required String pkCol,
+    required String nameCol,
+    required String categoryCol,
+    required String extraCols,
+    required int limit,
+    required int offset,
+    String? search,
+    String searchCol = 'name',
+  }) async {
+    final conditions = ['is_active = 1'];
+    final params = <String, dynamic>{'limit': limit, 'offset': offset};
+
+    if (search != null && search.isNotEmpty) {
+      conditions.add('$searchCol LIKE :search');
+      params['search'] = '%$search%';
+    }
+
+    final where = 'WHERE ${conditions.join(' AND ')}';
+
+    final countResult = await _pool.execute(
+      'SELECT COUNT(*) as total FROM $table $where',
+      params,
+    );
+    final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
+
+    final result = await _pool.execute(
+      'SELECT $pkCol AS id, $nameCol AS name, $categoryCol AS category, '
+      'rate, currency, is_active, created_at$extraCols '
+      'FROM $table $where ORDER BY $nameCol LIMIT :limit OFFSET :offset',
+      params,
+    );
+
+    return (result.rows.map(_rowToMap).toList(), total);
+  }
+
+  Future<(List<Map<String, dynamic>>, int)> _queryConsultation({
+    required int limit,
+    required int offset,
+    String? search,
+  }) async {
+    final conditions = ['is_active = 1'];
+    final params = <String, dynamic>{'limit': limit, 'offset': offset};
+
+    if (search != null && search.isNotEmpty) {
+      conditions.add('department_name LIKE :search');
+      params['search'] = '%$search%';
+    }
+
+    final where = 'WHERE ${conditions.join(' AND ')}';
+
+    final countResult = await _pool.execute(
+      'SELECT COUNT(*) as total FROM consultation_fees $where',
+      params,
+    );
+    final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
+
+    final result = await _pool.execute(
+      'SELECT consultation_id AS id, department_name AS name, '
+      'fee_type AS category, rate, currency, is_active, created_at '
+      'FROM consultation_fees $where '
+      'ORDER BY department_name LIMIT :limit OFFSET :offset',
+      params,
+    );
+
+    return (result.rows.map(_rowToMap).toList(), total);
+  }
+
   Future<(List<Map<String, dynamic>>, int)> findDrugs({
     int limit = 20,
     int offset = 0,
