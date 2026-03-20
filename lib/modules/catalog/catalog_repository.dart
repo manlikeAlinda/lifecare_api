@@ -217,15 +217,22 @@ class CatalogRepository {
   Future<(List<Map<String, dynamic>>, int)> findDrugs({
     int limit = 20,
     int offset = 0,
-    String? category,
     String? search,
+    bool? active, // null = all, true = active only, false = inactive only
   }) async {
     // drugs is a standalone legacy table — not linked to catalog_items.
-    final conditions = ['is_active = 1'];
+    final conditions = <String>[];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
 
+    if (active != null) {
+      conditions.add('is_active = :active');
+      params['active'] = active ? 1 : 0;
+    } else {
+      conditions.add('is_active = 1'); // default: active only
+    }
+
     if (search != null && search.isNotEmpty) {
-      conditions.add('drug_name LIKE :search');
+      conditions.add('(drug_name LIKE :search OR drug_type LIKE :search)');
       params['search'] = '%$search%';
     }
 
@@ -245,6 +252,25 @@ class CatalogRepository {
     );
 
     return (result.rows.map(_rowToMap).toList(), total);
+  }
+
+  Future<int> countDrugs({bool? active}) async {
+    final conditions = <String>[];
+    final params = <String, dynamic>{};
+
+    if (active != null) {
+      conditions.add('is_active = :active');
+      params['active'] = active ? 1 : 0;
+    } else {
+      conditions.add('is_active = 1');
+    }
+
+    final where = 'WHERE ${conditions.join(' AND ')}';
+    final result = await _pool.execute(
+      'SELECT COUNT(*) as total FROM drugs $where',
+      params,
+    );
+    return int.parse(result.rows.first.assoc()['total'] ?? '0');
   }
 
   Future<(List<Map<String, dynamic>>, int)> findAll({

@@ -25,16 +25,28 @@ class CatalogHandler {
   Future<Response> listDrugs(Request request) async {
     final limit = parseLimit(request);
     final offset = parseOffset(request);
-    final category = queryParam(request, 'category');
     final search = queryParam(request, 'search');
+    final activeParam = queryParam(request, 'active');
+    final bool? active = activeParam == null
+        ? null
+        : activeParam == 'false' || activeParam == '0' ? false : true;
 
     final (items, total) = await _service.listDrugs(
       limit: limit,
       offset: offset,
-      category: category,
       search: search,
+      active: active,
     );
     return okListResponse(items, total: total, limit: limit, offset: offset);
+  }
+
+  Future<Response> countDrugs(Request request) async {
+    final activeParam = queryParam(request, 'active');
+    final bool? active = activeParam == null
+        ? null
+        : activeParam == 'false' || activeParam == '0' ? false : true;
+    final total = await _service.countDrugs(active: active);
+    return okResponse({'total': total});
   }
 
   Future<Response> listByCategory(Request request, String category) async {
