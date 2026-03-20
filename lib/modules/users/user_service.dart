@@ -45,6 +45,8 @@ class UserService {
     return user;
   }
 
+  Future<List<Map<String, dynamic>>> listRoles() => _repo.getRoles();
+
   Future<Map<String, dynamic>> updateUser(
     String id,
     Map<String, dynamic> data,
@@ -55,6 +57,10 @@ class UserService {
     final allowed = <String, dynamic>{};
     if (data['full_name'] != null) allowed['full_name'] = data['full_name'];
     if (data['email'] != null) allowed['email'] = data['email'];
+    if (data.containsKey('is_active')) {
+      final v = data['is_active'];
+      allowed['is_active'] = (v == true || v == 1) ? 1 : 0;
+    }
 
     final updated = await _repo.update(id, allowed);
     return updated!;
@@ -66,14 +72,11 @@ class UserService {
     await _repo.softDelete(id);
   }
 
-  Future<void> changePassword(String id, Map<String, dynamic> data) async {
+  Future<void> changePassword(String id, String newPassword) async {
     final user = await _repo.findById(id);
     if (user == null) throw ApiError.notFound('User not found');
 
-    final newHash = BCrypt.hashpw(
-      data['new_password'] as String,
-      BCrypt.gensalt(),
-    );
+    final newHash = BCrypt.hashpw(newPassword, BCrypt.gensalt());
     await _repo.updatePassword(id, newHash, 'bcrypt');
   }
 
