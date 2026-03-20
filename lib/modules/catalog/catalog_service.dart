@@ -22,15 +22,12 @@ class CatalogService {
   Future<(List<Map<String, dynamic>>, int)> listDrugs({
     int limit = 20,
     int offset = 0,
-    String? category,
     String? search,
+    bool? active,
   }) =>
-      _repo.findDrugs(
-        limit: limit,
-        offset: offset,
-        category: category,
-        search: search,
-      );
+      _repo.findDrugs(limit: limit, offset: offset, search: search, active: active);
+
+  Future<int> countDrugs({bool? active}) => _repo.countDrugs(active: active);
 
   Future<(List<Map<String, dynamic>>, int)> listAll({
     int limit = 20,

@@ -320,6 +320,15 @@ Handler buildApp() {
     '/v1/catalog/drugs',
     patientAuth.addHandler(catalogHandler.listDrugs),
   );
+  // count route must be before /<id> wildcard
+  router.get(
+    '/v1/catalog/drugs/count',
+    patientAuth.addHandler(catalogHandler.countDrugs),
+  );
+  router.get(
+    '/v1/drugs/count',
+    patientAuth.addHandler(catalogHandler.countDrugs),
+  );
   // Category-specific service routes — registered before /<id> wildcard
   // Slugs: dental, lab, procedures, imaging, laparoscopic, accommodation, consultation
   router.get(
