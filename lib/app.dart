@@ -270,6 +270,12 @@ Handler buildApp() {
       (Request req) => walletHandler.getLedger(req, req.params['id']!),
     ),
   );
+  router.get(
+    '/v1/wallets/<id>/dependents',
+    patientAuth.addHandler(
+      (Request req) => walletHandler.getDependents(req, req.params['id']!),
+    ),
+  );
   router.post(
     '/v1/wallets/<id>/transactions',
     patientAuth.addHandler(
@@ -298,6 +304,12 @@ Handler buildApp() {
       (Request req) => encounterHandler.delete(req, req.params['id']!),
     ),
   );
+  router.patch(
+    '/v1/encounters/<id>/status',
+    patientAuth.addHandler(
+      (Request req) => encounterHandler.updateStatus(req, req.params['id']!),
+    ),
+  );
 
   // ── Catalog ───────────────────────────────────────────────────────────────────
   router.get(
@@ -318,12 +330,17 @@ Handler buildApp() {
   router.get('/v1/services', patientAuth.addHandler(catalogHandler.listServices));
   router.get('/v1/drugs', patientAuth.addHandler(catalogHandler.listDrugs));
 
-  // Category-specific service routes (dental, laboratory, imaging, procedures,
-  // laparoscopic, accommodation, consultation)
+  // Category-specific service routes — both path prefixes supported
   router.get(
     '/v1/services/<category>',
     patientAuth.addHandler(
       (Request req) => catalogHandler.listByCategory(req, req.params['category']!),
+    ),
+  );
+  router.get(
+    '/v1/catalog/services/<domain>',
+    patientAuth.addHandler(
+      (Request req) => catalogHandler.listByCategory(req, req.params['domain']!),
     ),
   );
 

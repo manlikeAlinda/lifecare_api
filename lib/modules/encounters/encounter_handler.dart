@@ -4,6 +4,9 @@ import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
 import 'encounter_service.dart';
 
+// Canonical status values — includes both API-originated and app-originated names.
+const _validStatuses = ['open', 'closed', 'cancelled', 'completed', 'pending'];
+
 class EncounterHandler {
   final EncounterService _service;
 
@@ -16,6 +19,7 @@ class EncounterHandler {
     final status = queryParam(request, 'status');
     final dateFrom = queryParam(request, 'date_from');
     final dateTo = queryParam(request, 'date_to');
+    final search = queryParam(request, 'search');
 
     final (encounters, total) = await _service.listEncounters(
       limit: limit,
@@ -24,6 +28,7 @@ class EncounterHandler {
       status: status,
       dateFrom: dateFrom,
       dateTo: dateTo,
+      search: search,
     );
     return okListResponse(encounters, total: total, limit: limit, offset: offset);
   }
@@ -51,10 +56,27 @@ class EncounterHandler {
     final caller = requireAuthUser(request);
 
     Validator(body)
-      ..oneOf('status', ['open', 'closed', 'cancelled'])
+      ..oneOf('status', _validStatuses)
       ..throwIfInvalid();
 
     final encounter = await _service.updateEncounter(id, body, caller.id);
+    return okResponse(encounter);
+  }
+
+  Future<Response> updateStatus(Request request, String id) async {
+    final body = await parseJsonBody(request);
+    final caller = requireAuthUser(request);
+
+    Validator(body)
+      ..required('status')
+      ..oneOf('status', _validStatuses)
+      ..throwIfInvalid();
+
+    final encounter = await _service.updateEncounter(
+      id,
+      {'status': body['status']},
+      caller.id,
+    );
     return okResponse(encounter);
   }
 

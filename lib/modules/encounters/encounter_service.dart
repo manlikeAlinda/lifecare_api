@@ -16,6 +16,7 @@ class EncounterService {
     String? status,
     String? dateFrom,
     String? dateTo,
+    String? search,
   }) =>
       _repo.findAll(
         limit: limit,
@@ -24,6 +25,7 @@ class EncounterService {
         status: status,
         dateFrom: dateFrom,
         dateTo: dateTo,
+        search: search,
       );
 
   Future<Map<String, dynamic>> getEncounter(String id) async {
@@ -47,13 +49,14 @@ class EncounterService {
     final services = (data['services'] as List? ?? []).cast<Map<String, dynamic>>();
     final medications = (data['medications'] as List? ?? []).cast<Map<String, dynamic>>();
 
-    // Calculate total
+    // Calculate total — use pre-computed total_price if present, otherwise
+    // derive from unit_price (or price) × quantity.
     double total = 0;
     for (final svc in services) {
-      total += (svc['total_price'] as num?)?.toDouble() ?? 0;
+      total += _lineTotal(svc, priceKey: 'unit_price', altPriceKey: 'price');
     }
     for (final med in medications) {
-      total += (med['total_price'] as num?)?.toDouble() ?? 0;
+      total += _lineTotal(med, priceKey: 'unit_price', altPriceKey: 'rate');
     }
 
     final balance = (wallet['balance'] as num?)?.toDouble() ?? 0;
@@ -102,5 +105,26 @@ class EncounterService {
     }
 
     await _repo.delete(id, deletedBy);
+  }
+
+  static double _lineTotal(
+    Map<String, dynamic> item, {
+    required String priceKey,
+    required String altPriceKey,
+  }) {
+    // Prefer pre-computed total_price if provided.
+    final preTotal = item['total_price'];
+    if (preTotal != null) return _toDouble(preTotal);
+
+    final price = _toDouble(item[priceKey] ?? item[altPriceKey]);
+    final qty = _toDouble(item['quantity'] ?? 1);
+    return price * qty;
+  }
+
+  static double _toDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v) ?? 0.0;
+    return 0.0;
   }
 }

@@ -34,6 +34,12 @@ class WalletService {
     return _repo.getLedger(walletId, limit: limit, offset: offset);
   }
 
+  Future<List<Map<String, dynamic>>> getWalletDependents(String walletId) async {
+    final wallet = await _repo.findById(walletId);
+    if (wallet == null) throw ApiError.notFound('Wallet not found');
+    return _repo.findDependentsByWalletId(walletId);
+  }
+
   Future<Map<String, dynamic>> createTransaction(
     String walletId,
     Map<String, dynamic> data,

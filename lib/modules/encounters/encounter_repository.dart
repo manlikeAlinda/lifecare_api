@@ -32,6 +32,7 @@ class EncounterRepository {
     String? status,
     String? dateFrom,
     String? dateTo,
+    String? search,
   }) async {
     final conditions = <String>[];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
@@ -52,11 +53,19 @@ class EncounterRepository {
       conditions.add('e.visited_at <= :dateTo');
       params['dateTo'] = dateTo;
     }
+    if (search != null && search.isNotEmpty) {
+      conditions.add(
+        '(p.full_name LIKE :search OR e.reference_number LIKE :search OR e.service_type LIKE :search)',
+      );
+      params['search'] = '%$search%';
+    }
 
     final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
 
     final countResult = await _pool.execute(
-      'SELECT COUNT(*) as total FROM encounters e $where',
+      'SELECT COUNT(*) as total FROM encounters e '
+      'LEFT JOIN patients p ON p.patient_id = e.patient_id '
+      '$where',
       params,
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
@@ -71,7 +80,22 @@ class EncounterRepository {
       'ORDER BY e.visited_at DESC LIMIT :limit OFFSET :offset',
       params,
     );
-    return (result.rows.map(_rowToMap).toList(), total);
+
+    final encounters = result.rows.map(_rowToMap).toList();
+
+    // Batch-fetch services and medications for the listed encounters.
+    if (encounters.isNotEmpty) {
+      final ids = encounters.map((e) => e['id'] as String).toList();
+      final svcMap = await _findServicesForIds(ids);
+      final medMap = await _findMedicationsForIds(ids);
+      for (final enc in encounters) {
+        final id = enc['id'] as String;
+        enc['services'] = svcMap[id] ?? [];
+        enc['medications'] = medMap[id] ?? [];
+      }
+    }
+
+    return (encounters, total);
   }
 
   Future<Map<String, dynamic>?> findById(String id) async {
@@ -88,24 +112,66 @@ class EncounterRepository {
 
     final encounter = _rowToMap(result.rows.first);
 
-    // Fetch services (service_name is denormalised on the row).
-    final services = await _pool.execute(
+    final svcMap = await _findServicesForIds([id]);
+    final medMap = await _findMedicationsForIds([id]);
+    encounter['services'] = svcMap[id] ?? [];
+    encounter['medications'] = medMap[id] ?? [];
+    return encounter;
+  }
+
+  // ── Batch helpers ─────────────────────────────────────────────────────────
+
+  Future<Map<String, List<Map<String, dynamic>>>> _findServicesForIds(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return {};
+    final params = <String, dynamic>{};
+    final placeholders = <String>[];
+    for (var i = 0; i < ids.length; i++) {
+      params['eid$i'] = ids[i];
+      placeholders.add("UNHEX(REPLACE(:eid$i, '-', ''))");
+    }
+    final result = await _pool.execute(
       'SELECT '
+      "LOWER(CONCAT(SUBSTR(HEX(es.encounter_id),1,8),'-',SUBSTR(HEX(es.encounter_id),9,4),'-',"
+      "SUBSTR(HEX(es.encounter_id),13,4),'-',SUBSTR(HEX(es.encounter_id),17,4),'-',"
+      "SUBSTR(HEX(es.encounter_id),21))) AS encounter_id, "
       "LOWER(CONCAT(SUBSTR(HEX(es.id),1,8),'-',SUBSTR(HEX(es.id),9,4),'-',"
       "SUBSTR(HEX(es.id),13,4),'-',SUBSTR(HEX(es.id),17,4),'-',"
       "SUBSTR(HEX(es.id),21))) AS id, "
       "LOWER(CONCAT(SUBSTR(HEX(es.service_id),1,8),'-',SUBSTR(HEX(es.service_id),9,4),'-',"
       "SUBSTR(HEX(es.service_id),13,4),'-',SUBSTR(HEX(es.service_id),17,4),'-',"
       "SUBSTR(HEX(es.service_id),21))) AS service_id, "
-      'es.service_name AS name, es.quantity, es.price AS unit_price, (es.price * es.quantity) AS total_price '
+      'es.service_name AS name, es.quantity, es.price AS unit_price, '
+      '(es.price * es.quantity) AS total_price '
       'FROM encounter_services es '
-      "WHERE es.encounter_id = UNHEX(REPLACE(:id, '-', ''))",
-      {'id': id},
+      'WHERE es.encounter_id IN (${placeholders.join(', ')})',
+      params,
     );
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final row in result.rows) {
+      final r = _rowToMap(row);
+      final encId = r.remove('encounter_id') as String;
+      map.putIfAbsent(encId, () => []).add(r);
+    }
+    return map;
+  }
 
-    // Fetch medications (medication_name is denormalised on the row).
-    final medications = await _pool.execute(
+  Future<Map<String, List<Map<String, dynamic>>>> _findMedicationsForIds(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return {};
+    final params = <String, dynamic>{};
+    final placeholders = <String>[];
+    for (var i = 0; i < ids.length; i++) {
+      params['mid$i'] = ids[i];
+      placeholders.add("UNHEX(REPLACE(:mid$i, '-', ''))");
+    }
+    final result = await _pool.execute(
       'SELECT '
+      "LOWER(CONCAT(SUBSTR(HEX(em.encounter_id),1,8),'-',SUBSTR(HEX(em.encounter_id),9,4),'-',"
+      "SUBSTR(HEX(em.encounter_id),13,4),'-',SUBSTR(HEX(em.encounter_id),17,4),'-',"
+      "SUBSTR(HEX(em.encounter_id),21))) AS encounter_id, "
       "LOWER(CONCAT(SUBSTR(HEX(em.id),1,8),'-',SUBSTR(HEX(em.id),9,4),'-',"
       "SUBSTR(HEX(em.id),13,4),'-',SUBSTR(HEX(em.id),17,4),'-',"
       "SUBSTR(HEX(em.id),21))) AS id, "
@@ -113,14 +179,19 @@ class EncounterRepository {
       'em.rate AS unit_price, (em.rate * em.quantity) AS total_price, '
       'em.dosage_instructions '
       'FROM encounter_medications em '
-      "WHERE em.encounter_id = UNHEX(REPLACE(:id, '-', ''))",
-      {'id': id},
+      'WHERE em.encounter_id IN (${placeholders.join(', ')})',
+      params,
     );
-
-    encounter['services'] = services.rows.map(_rowToMap).toList();
-    encounter['medications'] = medications.rows.map(_rowToMap).toList();
-    return encounter;
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final row in result.rows) {
+      final r = _rowToMap(row);
+      final encId = r.remove('encounter_id') as String;
+      map.putIfAbsent(encId, () => []).add(r);
+    }
+    return map;
   }
+
+  // ── Create ────────────────────────────────────────────────────────────────
 
   /// Atomic encounter creation: inserts encounter, services, medications,
   /// deducts wallet ledger, updates wallet balance, writes audit — one tx.
@@ -150,15 +221,17 @@ class EncounterRepository {
         {
           'id': encounterId,
           'patientId': patientId,
-          'referenceNumber': referenceNumber,
+          'referenceNumber': referenceNumber ?? '',
           'visitedAt': visitedAt ?? _nowString(),
-          'serviceType': serviceType,
+          'serviceType': serviceType ?? 'General',
           'totalCost': totalCost,
         },
       );
 
       // 2. Insert services.
       for (final svc in services) {
+        final rawId = svc['catalog_item_id'] ?? svc['service_id'];
+        final serviceId = _toUuidString(rawId) ?? '00000000-0000-0000-0000-000000000000';
         await conn.execute(
           'INSERT INTO encounter_services '
           '(id, encounter_id, service_id, service_name, price, quantity) '
@@ -167,24 +240,18 @@ class EncounterRepository {
           {
             'id': generateUuid(),
             'encId': encounterId,
-            'serviceId': svc['catalog_item_id'] as String? ??
-                svc['service_id'] as String? ??
-                '00000000-0000-0000-0000-000000000000',
-            'serviceName': svc['service_name'] as String? ??
-                svc['name'] as String? ??
-                '',
-            'price': (svc['unit_price'] as num?)?.toDouble() ??
-                (svc['price'] as num?)?.toDouble() ??
-                0.0,
-            'qty': svc['quantity'] ?? 1,
+            'serviceId': serviceId,
+            'serviceName': svc['service_name'] as String? ?? svc['name'] as String? ?? '',
+            'price': _toDouble(svc['unit_price'] ?? svc['price']),
+            'qty': _toInt(svc['quantity'] ?? 1),
           },
         );
       }
 
-      // 3. Insert medications (stored in medication_id BINARY(16), not drug_id INT).
+      // 3. Insert medications.
       for (final med in medications) {
-        final medId = med['catalog_item_id'] as String? ??
-            med['medication_id'] as String?;
+        final rawMedId = med['catalog_item_id'] ?? med['medication_id'];
+        final medId = _toUuidString(rawMedId);
         await conn.execute(
           'INSERT INTO encounter_medications '
           '(id, encounter_id, medication_id, dosage_instructions, quantity, '
@@ -197,13 +264,10 @@ class EncounterRepository {
             'encId': encounterId,
             if (medId != null) 'medId': medId,
             'dosage': med['dosage_instructions'],
-            'qty': med['quantity'] ?? 1,
-            'rate': (med['unit_price'] as num?)?.toDouble() ??
-                (med['rate'] as num?)?.toDouble() ??
-                0.0,
-            'medName': med['medication_name'] as String? ??
-                med['name'] as String? ??
-                '',
+            'qty': _toInt(med['quantity'] ?? 1),
+            'rate': _toDouble(med['unit_price'] ?? med['rate']),
+            'medName':
+                med['medication_name'] as String? ?? med['name'] as String? ?? '',
           },
         );
       }
@@ -229,7 +293,7 @@ class EncounterRepository {
         {'amount': totalCostInt, 'walletId': walletId},
       );
 
-      // 6. Audit log — correct schema.
+      // 6. Audit log.
       await conn.execute(
         'INSERT INTO audit_log '
         '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
@@ -323,6 +387,39 @@ class EncounterRepository {
         },
       );
     });
+  }
+
+  // ── Type helpers ──────────────────────────────────────────────────────────
+
+  static double _toDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v) ?? 0.0;
+    return 0.0;
+  }
+
+  static int _toInt(dynamic v) {
+    if (v == null) return 1;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v) ?? 1;
+    return 1;
+  }
+
+  /// Returns v as a UUID string if it looks like one, null otherwise.
+  static String? _toUuidString(dynamic v) {
+    if (v == null) return null;
+    final s = v.toString();
+    // Accept 32 hex chars with optional dashes (UUID format)
+    final stripped = s.replaceAll('-', '');
+    if (stripped.length == 32 && RegExp(r'^[0-9a-fA-F]+$').hasMatch(stripped)) {
+      // Re-format as UUID if not already
+      if (s.contains('-')) return s;
+      return '${stripped.substring(0, 8)}-${stripped.substring(8, 12)}-'
+          '${stripped.substring(12, 16)}-${stripped.substring(16, 20)}-'
+          '${stripped.substring(20)}';
+    }
+    return null; // INT pk or invalid — fall back to zero UUID at call site
   }
 
   String _nowString() {

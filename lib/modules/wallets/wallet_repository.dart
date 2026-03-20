@@ -199,5 +199,21 @@ class WalletRepository {
     return _rowToMap(result.rows.first);
   }
 
+  Future<List<Map<String, dynamic>>> findDependentsByWalletId(
+    String walletId,
+  ) async {
+    final result = await _pool.execute(
+      'SELECT '
+      "LOWER(CONCAT(SUBSTR(HEX(dependent_id),1,8),'-',SUBSTR(HEX(dependent_id),9,4),'-',"
+      "SUBSTR(HEX(dependent_id),13,4),'-',SUBSTR(HEX(dependent_id),17,4),'-',"
+      "SUBSTR(HEX(dependent_id),21))) AS id, "
+      'full_name, phone_number, relationship, national_id, is_active, created_at '
+      'FROM dependents '
+      "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', '')) AND is_active = 1",
+      {'walletId': walletId},
+    );
+    return result.rows.map(_rowToMap).toList();
+  }
+
   Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);
 }

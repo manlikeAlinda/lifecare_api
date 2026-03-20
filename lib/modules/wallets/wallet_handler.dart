@@ -35,6 +35,11 @@ class WalletHandler {
     return okListResponse(entries, total: total, limit: limit, offset: offset);
   }
 
+  Future<Response> getDependents(Request request, String id) async {
+    final dependents = await _service.getWalletDependents(id);
+    return okListResponse(dependents, total: dependents.length, limit: dependents.length, offset: 0);
+  }
+
   Future<Response> createTransaction(Request request, String id) async {
     final body = await parseJsonBody(request);
     final caller = requireAuthUser(request);
