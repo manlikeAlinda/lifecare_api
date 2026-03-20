@@ -82,6 +82,18 @@ class UserService {
     await _repo.updatePassword(id, newHash, 'bcrypt');
   }
 
+  Future<Map<String, dynamic>> getPreferences(String id) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+    return _repo.getPreferences(id);
+  }
+
+  Future<void> updatePreferences(String id, Map<String, dynamic> prefs) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+    await _repo.upsertPreferences(id, prefs);
+  }
+
   Future<(List<Map<String, dynamic>>, int)> getUserAuditLog(
     String id, {
     int limit = 20,

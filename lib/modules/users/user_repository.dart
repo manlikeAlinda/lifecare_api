@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 
@@ -9,24 +10,6 @@ class UserRepository {
   // Real DB columns: user_id (PK), username, display_name, email, phone_e164,
   // password_hash (varbinary), password_alg, is_active, created_at
   // Role is managed via user_roles + roles join table.
-
-  static String _uuidHex(String col, [String? alias]) {
-    final a = alias ?? col;
-    return "LOWER(CONCAT(SUBSTR(HEX($col),1,8),'-',SUBSTR(HEX($col),9,4),'-',"
-        "SUBSTR(HEX($col),13,4),'-',SUBSTR(HEX($col),17,4),'-',"
-        "SUBSTR(HEX($col),21))) AS $a";
-  }
-
-  static const _selectFields = 'SELECT '
-      "${_uuidHex_u_id}, "
-      'u.username, u.display_name AS full_name, u.email, u.is_active, u.created_at, '
-      "COALESCE(r.role_key, 'staff') AS role "
-      'FROM users u '
-      'LEFT JOIN user_roles ur ON ur.user_id = u.user_id '
-      'LEFT JOIN roles r ON r.role_id = ur.role_id';
-
-  // Dart doesn't support non-trivial expressions in const, so we build the
-  // SELECT inline in each method instead. The constant above is just for reference.
 
   static const _uuidHex_u_id =
       "LOWER(CONCAT(SUBSTR(HEX(u.user_id),1,8),'-',SUBSTR(HEX(u.user_id),9,4),'-',"
@@ -227,6 +210,37 @@ class UserRepository {
       'UPDATE sessions SET revoked_at = NOW() '
       "WHERE user_id = UNHEX(REPLACE(:userId, '-', '')) AND revoked_at IS NULL",
       {'userId': userId},
+    );
+  }
+
+  /// Returns the stored preferences map, or an empty map if no row exists yet.
+  Future<Map<String, dynamic>> getPreferences(String userId) async {
+    final result = await _pool.execute(
+      'SELECT preferences FROM user_preferences '
+      "WHERE user_id = UNHEX(REPLACE(:userId, '-', '')) LIMIT 1",
+      {'userId': userId},
+    );
+    if (result.rows.isEmpty) return {};
+    final raw = result.rows.first.assoc()['preferences'];
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Upserts the preferences JSON blob for the given user.
+  Future<void> upsertPreferences(
+    String userId,
+    Map<String, dynamic> prefs,
+  ) async {
+    final json = jsonEncode(prefs);
+    await _pool.execute(
+      'INSERT INTO user_preferences (user_id, preferences) '
+      "VALUES (UNHEX(REPLACE(:userId, '-', '')), :prefs) "
+      'ON DUPLICATE KEY UPDATE preferences = :prefs, updated_at = NOW()',
+      {'userId': userId, 'prefs': json},
     );
   }
 
