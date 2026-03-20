@@ -154,6 +154,18 @@ Handler buildApp() {
       (Request req) => userHandler.delete(req, req.params['id']!),
     ),
   );
+  router.get(
+    '/v1/users/<id>/audit',
+    Pipeline().addMiddleware(auth).addHandler(
+      (Request req) => userHandler.auditLog(req, req.params['id']!),
+    ),
+  );
+  router.post(
+    '/v1/users/<id>/sessions/revoke',
+    Pipeline().addMiddleware(auth).addHandler(
+      (Request req) => userHandler.revokeSessions(req, req.params['id']!),
+    ),
+  );
   router.put(
     '/v1/users/<id>/password',
     Pipeline().addMiddleware(auth).addHandler(

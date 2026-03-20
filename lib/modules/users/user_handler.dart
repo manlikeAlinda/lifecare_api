@@ -91,6 +91,21 @@ class UserHandler {
     return noContentResponse();
   }
 
+  Future<Response> auditLog(Request request, String id) async {
+    final limit = parseLimit(request);
+    final offset = parseOffset(request);
+    final (entries, total) = await _service.getUserAuditLog(id, limit: limit, offset: offset);
+    return okListResponse(entries, total: total, limit: limit, offset: offset);
+  }
+
+  Future<Response> revokeSessions(Request request, String id) async {
+    final caller = requireAuthUser(request);
+    // Admins can revoke anyone; staff can only revoke their own.
+    if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
+    await _service.revokeAllSessions(id);
+    return noContentResponse();
+  }
+
   Future<Response> changeRole(Request request, String id) async {
     final body = await parseJsonBody(request);
 
