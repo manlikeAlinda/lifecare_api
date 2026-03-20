@@ -392,6 +392,10 @@ Handler buildApp() {
     '/v1/analytics/visits/trend',
     patientAuth.addHandler(analyticsHandler.getVisitTrend),
   );
+  router.get(
+    '/v1/analytics/deposits-held',
+    patientAuth.addHandler(analyticsHandler.getDepositsHeld),
+  );
   router.post(
     '/v1/reports/generate',
     Pipeline()

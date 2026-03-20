@@ -27,6 +27,11 @@ class AnalyticsHandler {
     return okListResponse(trend, total: trend.length);
   }
 
+  Future<Response> getDepositsHeld(Request request) async {
+    final data = await _service.getDepositsHeld();
+    return okResponse(data);
+  }
+
   Future<Response> generateReport(Request request) async {
     final body = await parseJsonBody(request);
 
