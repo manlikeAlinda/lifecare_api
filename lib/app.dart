@@ -131,6 +131,11 @@ Handler buildApp() {
     '/v1/users/me',
     Pipeline().addMiddleware(auth).addHandler(userHandler.me),
   );
+  // /roles must be before /<id> to prevent the wildcard from catching it
+  router.get(
+    '/v1/users/roles',
+    Pipeline().addMiddleware(auth).addHandler(userHandler.roles),
+  );
   router.get(
     '/v1/users/<id>',
     Pipeline().addMiddleware(auth).addHandler(
@@ -150,6 +155,12 @@ Handler buildApp() {
     ),
   );
   router.put(
+    '/v1/users/<id>/password',
+    Pipeline().addMiddleware(auth).addHandler(
+          (Request req) => userHandler.changePassword(req, req.params['id']!),
+        ),
+  );
+  router.post(
     '/v1/users/<id>/password',
     Pipeline().addMiddleware(auth).addHandler(
           (Request req) => userHandler.changePassword(req, req.params['id']!),

@@ -65,6 +65,11 @@ class UserHandler {
     return noContentResponse();
   }
 
+  Future<Response> roles(Request request) async {
+    final list = await _service.listRoles();
+    return okListResponse(list, total: list.length, limit: list.length, offset: 0);
+  }
+
   Future<Response> changePassword(Request request, String id) async {
     final body = await parseJsonBody(request);
     final caller = requireAuthUser(request);
@@ -74,12 +79,15 @@ class UserHandler {
       throw ApiError.forbidden();
     }
 
-    Validator(body)
-      ..required('new_password')
-      ..minLength('new_password', 8, label: 'New password')
+    // Accept 'password' (admin reset) or 'new_password' (self-change)
+    final newPw = body['password'] as String? ?? body['new_password'] as String?;
+
+    Validator({'password': newPw})
+      ..required('password')
+      ..minLength('password', 8, label: 'Password')
       ..throwIfInvalid();
 
-    await _service.changePassword(id, body);
+    await _service.changePassword(id, newPw!);
     return noContentResponse();
   }
 

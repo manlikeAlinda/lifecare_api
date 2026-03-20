@@ -123,6 +123,14 @@ class UserRepository {
     return (await findById(id))!;
   }
 
+  Future<List<Map<String, dynamic>>> getRoles() async {
+    final result = await _pool.execute(
+      'SELECT role_key AS id, role_name AS name FROM roles ORDER BY role_name',
+      {},
+    );
+    return result.rows.map((r) => Map<String, dynamic>.from(r.assoc())).toList();
+  }
+
   Future<Map<String, dynamic>?> update(
     String id,
     Map<String, dynamic> fields,
@@ -133,6 +141,7 @@ class UserRepository {
     final colMap = <String, String>{
       'full_name': 'display_name',
       'email': 'email',
+      'is_active': 'is_active',
     };
 
     final setClauses = fields.keys
