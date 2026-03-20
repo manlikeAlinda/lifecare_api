@@ -35,7 +35,8 @@ class UserRepository {
 
   static const _baseSelect = 'SELECT '
       "$_uuidHex_u_id, "
-      "u.username, u.display_name AS full_name, u.email, u.is_active, u.created_at, "
+      "u.username, u.display_name AS full_name, u.email, u.is_active, "
+      "u.last_login_at, u.created_at, "
       "COALESCE(r.role_key, 'staff') AS role "
       'FROM users u '
       'LEFT JOIN user_roles ur ON ur.user_id = u.user_id '
@@ -188,6 +189,44 @@ class UserRepository {
       'UPDATE users SET is_active = 0 '
       "WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
       {'id': id},
+    );
+  }
+
+  Future<(List<Map<String, dynamic>>, int)> getAuditLog(
+    String userId, {
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    final countResult = await _pool.execute(
+      'SELECT COUNT(*) as total FROM audit_log '
+      "WHERE actor_user_id = UNHEX(REPLACE(:userId, '-', ''))",
+      {'userId': userId},
+    );
+    final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
+
+    final result = await _pool.execute(
+      'SELECT '
+      "LOWER(CONCAT(SUBSTR(HEX(audit_id),1,8),'-',SUBSTR(HEX(audit_id),9,4),'-',"
+      "SUBSTR(HEX(audit_id),13,4),'-',SUBSTR(HEX(audit_id),17,4),'-',"
+      "SUBSTR(HEX(audit_id),21))) AS id, "
+      'action_type, entity_type, request_id, created_at '
+      'FROM audit_log '
+      "WHERE actor_user_id = UNHEX(REPLACE(:userId, '-', '')) "
+      'ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+      {'userId': userId, 'limit': limit, 'offset': offset},
+    );
+
+    return (
+      result.rows.map((r) => Map<String, dynamic>.from(r.assoc())).toList(),
+      total,
+    );
+  }
+
+  Future<void> revokeAllSessions(String userId) async {
+    await _pool.execute(
+      'UPDATE sessions SET revoked_at = NOW() '
+      "WHERE user_id = UNHEX(REPLACE(:userId, '-', '')) AND revoked_at IS NULL",
+      {'userId': userId},
     );
   }
 

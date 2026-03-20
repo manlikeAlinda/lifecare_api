@@ -56,7 +56,9 @@ class UserService {
 
     final allowed = <String, dynamic>{};
     if (data['full_name'] != null) allowed['full_name'] = data['full_name'];
-    if (data['email'] != null) allowed['email'] = data['email'];
+    // Only update email when the caller explicitly provides a non-empty value.
+    final email = data['email'];
+    if (email is String && email.isNotEmpty) allowed['email'] = email;
     if (data.containsKey('is_active')) {
       final v = data['is_active'];
       allowed['is_active'] = (v == true || v == 1) ? 1 : 0;
@@ -78,6 +80,22 @@ class UserService {
 
     final newHash = BCrypt.hashpw(newPassword, BCrypt.gensalt());
     await _repo.updatePassword(id, newHash, 'bcrypt');
+  }
+
+  Future<(List<Map<String, dynamic>>, int)> getUserAuditLog(
+    String id, {
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+    return _repo.getAuditLog(id, limit: limit, offset: offset);
+  }
+
+  Future<void> revokeAllSessions(String id) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+    await _repo.revokeAllSessions(id);
   }
 
   Future<Map<String, dynamic>> changeRole(String id, String role) async {

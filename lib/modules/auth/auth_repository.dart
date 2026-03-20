@@ -103,6 +103,12 @@ class AuthRepository {
         'expiresAt': _formatDateTime(expiresAt),
       },
     );
+    // Stamp last_login_at on the user row.
+    await _pool.execute(
+      'UPDATE users SET last_login_at = NOW() '
+      "WHERE user_id = UNHEX(REPLACE(:userId, '-', ''))",
+      {'userId': userId},
+    );
   }
 
   Future<Map<String, dynamic>?> findActiveSession(
