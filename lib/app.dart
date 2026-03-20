@@ -320,6 +320,14 @@ Handler buildApp() {
     '/v1/catalog/drugs',
     patientAuth.addHandler(catalogHandler.listDrugs),
   );
+  // Category-specific service routes — registered before /<id> wildcard
+  // Slugs: dental, lab, procedures, imaging, laparoscopic, accommodation, consultation
+  router.get(
+    '/v1/catalog/services/<domain>',
+    patientAuth.addHandler(
+      (Request req) => catalogHandler.listByCategory(req, req.params['domain']!),
+    ),
+  );
   router.get(
     '/v1/catalog/<id>',
     patientAuth.addHandler(
@@ -329,18 +337,10 @@ Handler buildApp() {
   // Alias routes — app uses these shorter paths
   router.get('/v1/services', patientAuth.addHandler(catalogHandler.listServices));
   router.get('/v1/drugs', patientAuth.addHandler(catalogHandler.listDrugs));
-
-  // Category-specific service routes — both path prefixes supported
   router.get(
     '/v1/services/<category>',
     patientAuth.addHandler(
       (Request req) => catalogHandler.listByCategory(req, req.params['category']!),
-    ),
-  );
-  router.get(
-    '/v1/catalog/services/<domain>',
-    patientAuth.addHandler(
-      (Request req) => catalogHandler.listByCategory(req, req.params['domain']!),
     ),
   );
 
