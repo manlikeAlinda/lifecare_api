@@ -15,16 +15,18 @@ class WalletRepository {
   //               amount_shillings, failure_reason, created_at
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Wallet SELECT — aliases wallet_id→id, primary_patient_id→patient_id,
-  // balance_shillings→balance, last_activity_at→updated_at for API compat.
+  // Wallet SELECT — aliases wallet_id→id, patient_id coalesced from both
+  // primary_patient_id and patient_id columns (schema has both).
   static const _walletSelect =
       'SELECT '
       "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
       "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
       "SUBSTR(HEX(wallet_id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(primary_patient_id),1,8),'-',SUBSTR(HEX(primary_patient_id),9,4),'-',"
-      "SUBSTR(HEX(primary_patient_id),13,4),'-',SUBSTR(HEX(primary_patient_id),17,4),'-',"
-      "SUBSTR(HEX(primary_patient_id),21))) AS patient_id, "
+      "LOWER(CONCAT(SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),1,8),'-',"
+      "SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),9,4),'-',"
+      "SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),13,4),'-',"
+      "SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),17,4),'-',"
+      "SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),21))) AS patient_id, "
       'balance_shillings AS balance, status, created_at, '
       'last_activity_at AS updated_at '
       'FROM wallets';
@@ -86,8 +88,7 @@ class WalletRepository {
       "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
       "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
       "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
-      'type AS transaction_type, amount_shillings AS amount, '
-      'status, created_at '
+      'type, amount_shillings, status, failure_reason, created_at '
       "FROM wallet_ledger "
       "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
       'ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
@@ -191,7 +192,7 @@ class WalletRepository {
       "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
       "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
       "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
-      'type AS transaction_type, amount_shillings AS amount, status, created_at '
+      'type, amount_shillings, status, failure_reason, created_at '
       'FROM wallet_ledger '
       "WHERE ledger_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': entryId},

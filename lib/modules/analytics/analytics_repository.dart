@@ -172,6 +172,20 @@ class AnalyticsRepository {
     };
   }
 
+  Future<Map<String, dynamic>> getDepositsHeld() async {
+    final result = await _pool.execute(
+      "SELECT COALESCE(SUM(balance_shillings), 0) AS deposits_held, "
+      "COUNT(*) AS wallet_count "
+      "FROM wallets WHERE status = 'ACTIVE'",
+      {},
+    );
+    final row = result.rows.first.assoc();
+    return {
+      'deposits_held': double.tryParse(row['deposits_held'] ?? '0') ?? 0.0,
+      'wallet_count': int.tryParse(row['wallet_count'] ?? '0') ?? 0,
+    };
+  }
+
   Future<int> _count(String sql, Map<String, dynamic> params) async {
     final result = await _pool.execute(sql, params);
     return int.parse(result.rows.first.assoc()['val'] ?? '0');
