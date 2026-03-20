@@ -155,6 +155,18 @@ Handler buildApp() {
     ),
   );
   router.get(
+    '/v1/users/<id>/preferences',
+    Pipeline().addMiddleware(auth).addHandler(
+      (Request req) => userHandler.getPreferences(req, req.params['id']!),
+    ),
+  );
+  router.put(
+    '/v1/users/<id>/preferences',
+    Pipeline().addMiddleware(auth).addHandler(
+      (Request req) => userHandler.updatePreferences(req, req.params['id']!),
+    ),
+  );
+  router.get(
     '/v1/users/<id>/audit',
     Pipeline().addMiddleware(auth).addHandler(
       (Request req) => userHandler.auditLog(req, req.params['id']!),

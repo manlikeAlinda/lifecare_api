@@ -91,6 +91,22 @@ class UserHandler {
     return noContentResponse();
   }
 
+  Future<Response> getPreferences(Request request, String id) async {
+    final caller = requireAuthUser(request);
+    if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
+    final prefs = await _service.getPreferences(id);
+    return okResponse(prefs);
+  }
+
+  Future<Response> updatePreferences(Request request, String id) async {
+    final caller = requireAuthUser(request);
+    if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
+    final body = await parseJsonBody(request);
+    await _service.updatePreferences(id, body);
+    final prefs = await _service.getPreferences(id);
+    return okResponse(prefs);
+  }
+
   Future<Response> auditLog(Request request, String id) async {
     final limit = parseLimit(request);
     final offset = parseOffset(request);
