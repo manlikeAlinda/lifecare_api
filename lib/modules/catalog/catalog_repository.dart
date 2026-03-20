@@ -56,8 +56,8 @@ class CatalogRepository {
   }
 
   // ── Category-specific tables (production DB) ──────────────────────────────
-  // Each category lives in its own table with slightly different columns.
-  // We normalise to: id, name, category, rate, currency, is_active, created_at
+  // Normalised response: id (int), name, category, rate, billing_unit, notes
+  // Tables without billing_unit/notes return NULL for those fields.
 
   Future<(List<Map<String, dynamic>>, int)> findByCategory(
     String category, {
@@ -72,23 +72,22 @@ class CatalogRepository {
           pkCol: 'dental_service_id',
           nameCol: 'procedure_name',
           categoryCol: 'category',
-          extraCols: '',
-          limit: limit,
-          offset: offset,
-          search: search,
+          billingUnitCol: null,   // table has no billing_unit
+          notesCol: null,
           searchCol: 'procedure_name',
+          limit: limit, offset: offset, search: search,
         );
+      case 'lab':
       case 'laboratory':
         return _queryCategory(
           table: 'lab_services',
           pkCol: 'lab_service_id',
           nameCol: 'service_name',
           categoryCol: 'category',
-          extraCols: '',
-          limit: limit,
-          offset: offset,
-          search: search,
+          billingUnitCol: null,
+          notesCol: null,
           searchCol: 'service_name',
+          limit: limit, offset: offset, search: search,
         );
       case 'imaging':
         return _queryCategory(
@@ -96,11 +95,10 @@ class CatalogRepository {
           pkCol: 'imaging_service_id',
           nameCol: 'test_name',
           categoryCol: 'modality',
-          extraCols: '',
-          limit: limit,
-          offset: offset,
-          search: search,
+          billingUnitCol: null,
+          notesCol: null,
           searchCol: 'test_name',
+          limit: limit, offset: offset, search: search,
         );
       case 'procedures':
         return _queryCategory(
@@ -108,11 +106,10 @@ class CatalogRepository {
           pkCol: 'procedure_package_id',
           nameCol: 'procedure_name',
           categoryCol: 'category',
-          extraCols: ', billing_unit',
-          limit: limit,
-          offset: offset,
-          search: search,
+          billingUnitCol: 'billing_unit',
+          notesCol: 'notes',
           searchCol: 'procedure_name',
+          limit: limit, offset: offset, search: search,
         );
       case 'laparoscopic':
         return _queryCategory(
@@ -120,11 +117,10 @@ class CatalogRepository {
           pkCol: 'laparoscopic_procedure_id',
           nameCol: 'procedure_name',
           categoryCol: 'category',
-          extraCols: ', billing_unit',
-          limit: limit,
-          offset: offset,
-          search: search,
+          billingUnitCol: 'billing_unit',
+          notesCol: 'notes',
           searchCol: 'procedure_name',
+          limit: limit, offset: offset, search: search,
         );
       case 'accommodation':
         return _queryCategory(
@@ -132,18 +128,13 @@ class CatalogRepository {
           pkCol: 'accommodation_service_id',
           nameCol: 'service_name',
           categoryCol: 'category',
-          extraCols: ', billing_unit',
-          limit: limit,
-          offset: offset,
-          search: search,
+          billingUnitCol: 'billing_unit',
+          notesCol: 'notes',
           searchCol: 'service_name',
+          limit: limit, offset: offset, search: search,
         );
       case 'consultation':
-        return _queryConsultation(
-          limit: limit,
-          offset: offset,
-          search: search,
-        );
+        return _queryConsultation(limit: limit, offset: offset, search: search);
       default:
         return (<Map<String, dynamic>>[], 0);
     }
@@ -154,12 +145,17 @@ class CatalogRepository {
     required String pkCol,
     required String nameCol,
     required String categoryCol,
-    required String extraCols,
+    required String? billingUnitCol,
+    required String? notesCol,
+    required String searchCol,
     required int limit,
     required int offset,
     String? search,
-    String searchCol = 'name',
   }) async {
+    final billingUnitExpr =
+        billingUnitCol != null ? billingUnitCol : 'NULL AS billing_unit';
+    final notesExpr = notesCol != null ? notesCol : 'NULL AS notes';
+
     final conditions = ['is_active = 1'];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
 
@@ -178,7 +174,7 @@ class CatalogRepository {
 
     final result = await _pool.execute(
       'SELECT $pkCol AS id, $nameCol AS name, $categoryCol AS category, '
-      'rate, currency, is_active, created_at$extraCols '
+      'rate, $billingUnitExpr, $notesExpr '
       'FROM $table $where ORDER BY $nameCol LIMIT :limit OFFSET :offset',
       params,
     );
@@ -209,7 +205,7 @@ class CatalogRepository {
 
     final result = await _pool.execute(
       'SELECT consultation_id AS id, department_name AS name, '
-      'fee_type AS category, rate, currency, is_active, created_at '
+      'fee_type AS category, rate, NULL AS billing_unit, NULL AS notes '
       'FROM consultation_fees $where '
       'ORDER BY department_name LIMIT :limit OFFSET :offset',
       params,
