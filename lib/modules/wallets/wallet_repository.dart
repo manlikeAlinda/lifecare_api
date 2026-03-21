@@ -84,12 +84,22 @@ class WalletRepository {
     int limit = 50,
     int offset = 0,
     String? type,
+    String? from,
+    String? to,
   }) async {
     final conditions = <String>[];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
     if (type != null) {
       conditions.add('type = :type');
       params['type'] = type;
+    }
+    if (from != null) {
+      conditions.add('created_at >= :from');
+      params['from'] = from;
+    }
+    if (to != null) {
+      conditions.add('created_at <= :to');
+      params['to'] = to;
     }
     final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
 

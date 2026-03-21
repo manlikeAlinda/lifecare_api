@@ -28,10 +28,14 @@ class WalletHandler {
     final limit = parseLimit(request);
     final offset = parseOffset(request);
     final type = queryParam(request, 'type');
+    final from = queryParam(request, 'from');
+    final to = queryParam(request, 'to');
     final (entries, total) = await _service.getGlobalLedger(
       limit: limit,
       offset: offset,
       type: type,
+      from: from,
+      to: to,
     );
     return okListResponse(entries, total: total, limit: limit, offset: offset);
   }

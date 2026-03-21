@@ -28,8 +28,10 @@ class WalletService {
     int limit = 50,
     int offset = 0,
     String? type,
+    String? from,
+    String? to,
   }) =>
-      _repo.findAllLedger(limit: limit, offset: offset, type: type);
+      _repo.findAllLedger(limit: limit, offset: offset, type: type, from: from, to: to);
 
   Future<(List<Map<String, dynamic>>, int)> getWalletLedger(
     String walletId, {
