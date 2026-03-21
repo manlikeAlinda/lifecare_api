@@ -282,6 +282,11 @@ Handler buildApp() {
 
   // ── Wallets ───────────────────────────────────────────────────────────────────
   router.get('/v1/wallets', patientAuth.addHandler(walletHandler.list));
+  // /ledger must be before /<id> to prevent the wildcard from catching it
+  router.get(
+    '/v1/wallets/ledger',
+    patientAuth.addHandler(walletHandler.getGlobalLedger),
+  );
   router.get(
     '/v1/wallets/<id>',
     patientAuth.addHandler(
@@ -310,6 +315,11 @@ Handler buildApp() {
   // ── Encounters ────────────────────────────────────────────────────────────────
   router.get('/v1/encounters', patientAuth.addHandler(encounterHandler.list));
   router.post('/v1/encounters', patientAuth.addHandler(encounterHandler.create));
+  // static sub-paths must be before /<id> wildcard
+  router.get(
+    '/v1/encounters/daily-counts',
+    patientAuth.addHandler(analyticsHandler.getDailyCounts),
+  );
   router.get(
     '/v1/encounters/<id>',
     patientAuth.addHandler(

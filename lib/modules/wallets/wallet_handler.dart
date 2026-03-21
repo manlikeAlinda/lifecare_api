@@ -24,6 +24,18 @@ class WalletHandler {
     return okResponse(wallet);
   }
 
+  Future<Response> getGlobalLedger(Request request) async {
+    final limit = parseLimit(request);
+    final offset = parseOffset(request);
+    final type = queryParam(request, 'type');
+    final (entries, total) = await _service.getGlobalLedger(
+      limit: limit,
+      offset: offset,
+      type: type,
+    );
+    return okListResponse(entries, total: total, limit: limit, offset: offset);
+  }
+
   Future<Response> getLedger(Request request, String id) async {
     final limit = parseLimit(request);
     final offset = parseOffset(request);

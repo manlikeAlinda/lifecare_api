@@ -32,6 +32,9 @@ class AnalyticsService {
 
   Future<Map<String, dynamic>> getDepositsHeld() => _repo.getDepositsHeld();
 
+  Future<List<Map<String, dynamic>>> getDailyCounts({int days = 7}) =>
+      _repo.getDailyCounts(days: days);
+
   Future<Map<String, dynamic>> generateReport(Map<String, dynamic> params) async {
     const validTypes = ['summary', 'encounters', 'financial'];
     final type = params['type'] as String? ?? 'summary';

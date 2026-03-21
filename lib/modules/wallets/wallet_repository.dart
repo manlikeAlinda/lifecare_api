@@ -68,6 +68,44 @@ class WalletRepository {
 
   // ── Ledger ────────────────────────────────────────────────────────────────
 
+  static const _ledgerSelect =
+      'SELECT '
+      "LOWER(CONCAT(SUBSTR(HEX(ledger_id),1,8),'-',SUBSTR(HEX(ledger_id),9,4),'-',"
+      "SUBSTR(HEX(ledger_id),13,4),'-',SUBSTR(HEX(ledger_id),17,4),'-',"
+      "SUBSTR(HEX(ledger_id),21))) AS id, "
+      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
+      "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
+      "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
+      'type, amount_shillings, status, failure_reason, created_at '
+      'FROM wallet_ledger';
+
+  /// Returns all ledger entries across all wallets, most recent first.
+  Future<(List<Map<String, dynamic>>, int)> findAllLedger({
+    int limit = 50,
+    int offset = 0,
+    String? type,
+  }) async {
+    final conditions = <String>[];
+    final params = <String, dynamic>{'limit': limit, 'offset': offset};
+    if (type != null) {
+      conditions.add('type = :type');
+      params['type'] = type;
+    }
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+
+    final countResult = await _pool.execute(
+      'SELECT COUNT(*) as total FROM wallet_ledger $where',
+      params,
+    );
+    final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
+
+    final result = await _pool.execute(
+      '$_ledgerSelect $where ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+      params,
+    );
+    return (result.rows.map(_rowToMap).toList(), total);
+  }
+
   Future<(List<Map<String, dynamic>>, int)> getLedger(
     String walletId, {
     int limit = 20,
@@ -81,15 +119,7 @@ class WalletRepository {
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(ledger_id),1,8),'-',SUBSTR(HEX(ledger_id),9,4),'-',"
-      "SUBSTR(HEX(ledger_id),13,4),'-',SUBSTR(HEX(ledger_id),17,4),'-',"
-      "SUBSTR(HEX(ledger_id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
-      "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
-      "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
-      'type, amount_shillings, status, failure_reason, created_at '
-      "FROM wallet_ledger "
+      '$_ledgerSelect '
       "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
       'ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
       {'walletId': walletId, 'limit': limit, 'offset': offset},
