@@ -361,6 +361,24 @@ Handler buildApp() {
       (Request req) => catalogHandler.listByCategory(req, req.params['domain']!),
     ),
   );
+  router.post(
+    '/v1/catalog/services/<domain>',
+    adminOnly.addHandler(
+      (Request req) => catalogHandler.createService(req, req.params['domain']!),
+    ),
+  );
+  router.put(
+    '/v1/catalog/services/<domain>/<id>',
+    adminOnly.addHandler(
+      (Request req) => catalogHandler.updateService(req, req.params['domain']!, req.params['id']!),
+    ),
+  );
+  router.delete(
+    '/v1/catalog/services/<domain>/<id>',
+    adminOnly.addHandler(
+      (Request req) => catalogHandler.deleteService(req, req.params['domain']!, req.params['id']!),
+    ),
+  );
   router.get(
     '/v1/catalog/<id>',
     patientAuth.addHandler(

@@ -1,5 +1,6 @@
 import 'package:shelf/shelf.dart';
 import 'package:lifecare_api/core/utils/response.dart';
+import 'package:lifecare_api/core/validation/validator.dart';
 import 'catalog_service.dart';
 
 class CatalogHandler {
@@ -66,5 +67,27 @@ class CatalogHandler {
   Future<Response> getById(Request request, String id) async {
     final item = await _service.getItem(id);
     return okResponse(item);
+  }
+
+  Future<Response> createService(Request request, String domain) async {
+    final body = await parseJsonBody(request);
+
+    Validator(body)
+      ..required('name')
+      ..throwIfInvalid();
+
+    final item = await _service.createService(domain, body);
+    return createdResponse(item);
+  }
+
+  Future<Response> updateService(Request request, String domain, String id) async {
+    final body = await parseJsonBody(request);
+    final item = await _service.updateService(domain, int.parse(id), body);
+    return okResponse(item);
+  }
+
+  Future<Response> deleteService(Request request, String domain, String id) async {
+    await _service.deleteService(domain, int.parse(id));
+    return noContentResponse();
   }
 }
