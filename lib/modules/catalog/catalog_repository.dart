@@ -59,6 +59,138 @@ class CatalogRepository {
   // Normalised response: id (int), name, category, rate, billing_unit, notes
   // Tables without billing_unit/notes return NULL for those fields.
 
+  // ── Domain config lookup ──────────────────────────────────────────────────
+  // Maps slug → table metadata. Returns null for unknown slugs.
+  ({
+    String table,
+    String pkCol,
+    String nameCol,
+    String categoryCol,
+    String? billingUnitCol,
+    String? notesCol,
+  })? _domainConfig(String domain) {
+    switch (domain.toLowerCase()) {
+      case 'dental':
+        return (table: 'dental_services', pkCol: 'dental_service_id', nameCol: 'procedure_name', categoryCol: 'category', billingUnitCol: null, notesCol: null);
+      case 'lab':
+      case 'laboratory':
+        return (table: 'lab_services', pkCol: 'lab_service_id', nameCol: 'service_name', categoryCol: 'category', billingUnitCol: null, notesCol: null);
+      case 'imaging':
+        return (table: 'imaging_services', pkCol: 'imaging_service_id', nameCol: 'test_name', categoryCol: 'modality', billingUnitCol: null, notesCol: null);
+      case 'procedures':
+        return (table: 'procedure_packages', pkCol: 'procedure_package_id', nameCol: 'procedure_name', categoryCol: 'category', billingUnitCol: 'billing_unit', notesCol: 'notes');
+      case 'laparoscopic':
+        return (table: 'laparoscopic_procedures', pkCol: 'laparoscopic_procedure_id', nameCol: 'procedure_name', categoryCol: 'category', billingUnitCol: 'billing_unit', notesCol: 'notes');
+      case 'accommodation':
+        return (table: 'accommodation_services', pkCol: 'accommodation_service_id', nameCol: 'service_name', categoryCol: 'category', billingUnitCol: 'billing_unit', notesCol: 'notes');
+      case 'consultation':
+        return (table: 'consultation_fees', pkCol: 'consultation_id', nameCol: 'department_name', categoryCol: 'fee_type', billingUnitCol: null, notesCol: null);
+      default:
+        return null;
+    }
+  }
+
+  // ── Category CRUD ─────────────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>?> findByDomainAndId(String domain, int id) async {
+    final cfg = _domainConfig(domain);
+    if (cfg == null) return null;
+    final billingExpr = cfg.billingUnitCol ?? 'NULL AS billing_unit';
+    final notesExpr = cfg.notesCol ?? 'NULL AS notes';
+    final result = await _pool.execute(
+      'SELECT ${cfg.pkCol} AS id, ${cfg.nameCol} AS name, '
+      '${cfg.categoryCol} AS category, rate, $billingExpr, $notesExpr '
+      'FROM ${cfg.table} WHERE ${cfg.pkCol} = :id LIMIT 1',
+      {'id': id},
+    );
+    if (result.rows.isEmpty) return null;
+    return _rowToMap(result.rows.first);
+  }
+
+  Future<Map<String, dynamic>?> createByDomain(
+    String domain,
+    Map<String, dynamic> data,
+  ) async {
+    final cfg = _domainConfig(domain);
+    if (cfg == null) return null;
+
+    final cols = <String>[cfg.nameCol, cfg.categoryCol, 'rate', 'is_active'];
+    final vals = <String>[':name', ':category', ':rate', '1'];
+    final params = <String, dynamic>{
+      'name': data['name'],
+      'category': data['category'] ?? '',
+      'rate': data['rate'] ?? 0,
+    };
+
+    if (cfg.billingUnitCol != null) {
+      cols.add(cfg.billingUnitCol!);
+      vals.add(':billing_unit');
+      params['billing_unit'] = data['billing_unit'];
+    }
+    if (cfg.notesCol != null) {
+      cols.add(cfg.notesCol!);
+      vals.add(':notes');
+      params['notes'] = data['notes'];
+    }
+
+    final result = await _pool.execute(
+      'INSERT INTO ${cfg.table} (${cols.join(', ')}) VALUES (${vals.join(', ')})',
+      params,
+    );
+    return findByDomainAndId(domain, result.lastInsertID.toInt());
+  }
+
+  Future<Map<String, dynamic>?> updateByDomain(
+    String domain,
+    int id,
+    Map<String, dynamic> data,
+  ) async {
+    final cfg = _domainConfig(domain);
+    if (cfg == null) return null;
+
+    final setClauses = <String>[];
+    final params = <String, dynamic>{'id': id};
+
+    if (data.containsKey('name')) {
+      setClauses.add('${cfg.nameCol} = :name');
+      params['name'] = data['name'];
+    }
+    if (data.containsKey('category')) {
+      setClauses.add('${cfg.categoryCol} = :category');
+      params['category'] = data['category'];
+    }
+    if (data.containsKey('rate')) {
+      setClauses.add('rate = :rate');
+      params['rate'] = data['rate'];
+    }
+    if (cfg.billingUnitCol != null && data.containsKey('billing_unit')) {
+      setClauses.add('${cfg.billingUnitCol} = :billing_unit');
+      params['billing_unit'] = data['billing_unit'];
+    }
+    if (cfg.notesCol != null && data.containsKey('notes')) {
+      setClauses.add('${cfg.notesCol} = :notes');
+      params['notes'] = data['notes'];
+    }
+
+    if (setClauses.isNotEmpty) {
+      await _pool.execute(
+        'UPDATE ${cfg.table} SET ${setClauses.join(', ')} WHERE ${cfg.pkCol} = :id',
+        params,
+      );
+    }
+    return findByDomainAndId(domain, id);
+  }
+
+  Future<bool> deleteByDomain(String domain, int id) async {
+    final cfg = _domainConfig(domain);
+    if (cfg == null) return false;
+    final result = await _pool.execute(
+      'DELETE FROM ${cfg.table} WHERE ${cfg.pkCol} = :id',
+      {'id': id},
+    );
+    return result.affectedRows.toInt() > 0;
+  }
+
   Future<(List<Map<String, dynamic>>, int)> findByCategory(
     String category, {
     int limit = 20,

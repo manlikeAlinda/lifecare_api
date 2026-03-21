@@ -57,4 +57,29 @@ class CatalogService {
     if (item == null) throw ApiError.notFound('Catalog item not found');
     return item;
   }
+
+  Future<Map<String, dynamic>> createService(
+    String domain,
+    Map<String, dynamic> data,
+  ) async {
+    final item = await _repo.createByDomain(domain, data);
+    if (item == null) throw ApiError.notFound('Unknown service domain: $domain');
+    return item;
+  }
+
+  Future<Map<String, dynamic>> updateService(
+    String domain,
+    int id,
+    Map<String, dynamic> data,
+  ) async {
+    final existing = await _repo.findByDomainAndId(domain, id);
+    if (existing == null) throw ApiError.notFound('Service not found');
+    final item = await _repo.updateByDomain(domain, id, data);
+    return item!;
+  }
+
+  Future<void> deleteService(String domain, int id) async {
+    final deleted = await _repo.deleteByDomain(domain, id);
+    if (!deleted) throw ApiError.notFound('Service not found');
+  }
 }
