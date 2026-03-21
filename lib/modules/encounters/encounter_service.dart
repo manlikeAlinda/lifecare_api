@@ -96,15 +96,8 @@ class EncounterService {
     return updated!;
   }
 
-  Future<void> deleteEncounter(String id, String deletedBy) async {
-    final encounter = await _repo.findById(id);
-    if (encounter == null) throw ApiError.notFound('Encounter not found');
-
-    if (encounter['status'] == 'cancelled') {
-      throw ApiError.businessRule('Encounter is already cancelled');
-    }
-
-    await _repo.delete(id, deletedBy);
+  Future<bool> deleteEncounter(String id) async {
+    return _repo.delete(id);
   }
 
   static double _lineTotal(

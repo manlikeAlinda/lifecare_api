@@ -363,30 +363,15 @@ class EncounterRepository {
     return findById(id);
   }
 
-  Future<void> delete(String id, String deletedBy) async {
-    await _pool.transactional((conn) async {
-      await conn.execute(
-        "UPDATE encounters SET status = 'cancelled' "
-        "WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
-        {'id': id},
-      );
-      await conn.execute(
-        'INSERT INTO audit_log '
-        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
-        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
-        "UNHEX(REPLACE(:actorId, '-', '')), "
-        ':actionType, :entityType, '
-        "UNHEX(REPLACE(:entityId, '-', '')), :requestId)",
-        {
-          'auditId': generateUuid(),
-          'actorId': deletedBy,
-          'actionType': 'CANCEL_ENCOUNTER',
-          'entityType': 'encounter',
-          'entityId': id,
-          'requestId': generateUuid(),
-        },
-      );
-    });
+  /// Hard-deletes the encounter row. Child rows in encounter_services,
+  /// encounter_medications, and encounter_drugs are removed by ON DELETE CASCADE.
+  /// Returns true if a row was deleted, false if the encounter was not found.
+  Future<bool> delete(String id) async {
+    final result = await _pool.execute(
+      "DELETE FROM encounters WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
+      {'id': id},
+    );
+    return result.affectedRows.toInt() > 0;
   }
 
   // ── Type helpers ──────────────────────────────────────────────────────────

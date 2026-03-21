@@ -1,4 +1,5 @@
 import 'package:shelf/shelf.dart';
+import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/middleware/auth_middleware.dart';
 import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
@@ -81,8 +82,8 @@ class EncounterHandler {
   }
 
   Future<Response> delete(Request request, String id) async {
-    final caller = requireAuthUser(request);
-    await _service.deleteEncounter(id, caller.id);
+    final deleted = await _service.deleteEncounter(id);
+    if (!deleted) throw ApiError.notFound('Encounter not found');
     return noContentResponse();
   }
 }
