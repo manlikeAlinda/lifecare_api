@@ -35,8 +35,8 @@ class AnalyticsHandler {
   Future<Response> getDailyCounts(Request request) async {
     final daysParam = queryParam(request, 'days');
     final days = daysParam != null ? (int.tryParse(daysParam) ?? 7) : 7;
-    final data = await _service.getDailyCounts(days: days.clamp(1, 90));
-    return okListResponse(data, total: data.length);
+    final counts = await _service.getDailyCounts(days: days.clamp(1, 90));
+    return okResponse({'counts': counts});
   }
 
   Future<Response> generateReport(Request request) async {

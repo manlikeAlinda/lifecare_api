@@ -81,12 +81,12 @@ class AnalyticsRepository {
 
   /// Returns one row per day for the last [days] days (including today),
   /// with zero-filled entries for days that have no encounters.
-  Future<List<Map<String, dynamic>>> getDailyCounts({int days = 7}) async {
+  Future<List<int>> getDailyCounts({int days = 7}) async {
     final result = await _pool.execute(
-      'SELECT DATE(visited_at) AS date, COUNT(*) AS count '
+      'SELECT DATE(created_at) AS date, COUNT(*) AS cnt '
       'FROM encounters '
-      'WHERE visited_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY) '
-      'GROUP BY DATE(visited_at) '
+      'WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY) '
+      'GROUP BY DATE(created_at) '
       'ORDER BY date ASC',
       {'days': days},
     );
@@ -96,20 +96,20 @@ class AnalyticsRepository {
     for (final row in result.rows) {
       final r = row.assoc();
       final date = r['date'] ?? '';
-      final count = int.tryParse(r['count'] ?? '0') ?? 0;
+      final count = int.tryParse(r['cnt'] ?? '0') ?? 0;
       if (date.isNotEmpty) dbMap[date] = count;
     }
 
-    // Generate the full date range so every day has an entry (zeros included).
+    // Generate the full date range (oldest first), zero-filling missing days.
     final today = DateTime.now();
-    final output = <Map<String, dynamic>>[];
+    final counts = <int>[];
     for (var i = days - 1; i >= 0; i--) {
       final d = today.subtract(Duration(days: i));
       final key =
           '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-      output.add({'date': key, 'count': dbMap[key] ?? 0});
+      counts.add(dbMap[key] ?? 0);
     }
-    return output;
+    return counts;
   }
 
   Future<Map<String, dynamic>> generateReport(Map<String, dynamic> params) async {
