@@ -24,6 +24,13 @@ class WalletService {
     return wallet;
   }
 
+  Future<(List<Map<String, dynamic>>, int)> getGlobalLedger({
+    int limit = 50,
+    int offset = 0,
+    String? type,
+  }) =>
+      _repo.findAllLedger(limit: limit, offset: offset, type: type);
+
   Future<(List<Map<String, dynamic>>, int)> getWalletLedger(
     String walletId, {
     int limit = 20,

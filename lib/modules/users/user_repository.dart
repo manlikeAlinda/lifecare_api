@@ -31,10 +31,14 @@ class UserRepository {
     String? role,
   }) async {
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
+    // Only filter by role when the value is a known system role.
+    // Unknown values (e.g. 'doctor') fall through to return all active users.
+    const knownRoles = {'admin', 'staff'};
+    final effectiveRole = (role != null && knownRoles.contains(role)) ? role : null;
     String where;
-    if (role != null) {
+    if (effectiveRole != null) {
       where = "WHERE r.role_key = :role AND u.is_active = 1";
-      params['role'] = role;
+      params['role'] = effectiveRole;
     } else {
       where = "WHERE u.is_active = 1";
     }
