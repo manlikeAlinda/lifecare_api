@@ -145,14 +145,13 @@ class PatientRepository {
       final auditId = generateUuid();
       await conn.execute(
         'INSERT INTO audit_log '
-        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
+        '(audit_id, user_id, action, target_type, target_id, details) '
         "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:userId, '-', '')), "
-        "  'create_patient', 'patient', UNHEX(REPLACE(:targetId, '-', '')), :requestId)",
+        "  'create_patient', 'patient', UNHEX(REPLACE(:targetId, '-', '')), '{}')",
         {
           'auditId': auditId,
           'userId': createdBy,
           'targetId': id,
-          'requestId': auditId,
         },
       );
     });
