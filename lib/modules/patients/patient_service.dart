@@ -92,10 +92,10 @@ class PatientService {
     Map<String, dynamic> data,
     String createdBy,
   ) async {
-    await _ensurePatientExists(primaryAccountId);
-
     final primary = await _repo.findById(primaryAccountId);
-    final primaryCode = primary!['patient_code'] as String? ?? '';
+    if (primary == null) throw ApiError.notFound('Patient not found');
+
+    final primaryCode = primary['patient_code'] as String? ?? '';
     final id = generateUuid();
 
     // Auto-generate a sub-patient code from primary code + short suffix
