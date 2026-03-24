@@ -38,27 +38,32 @@ class PatientRepository {
     bool activeOnly = true,
   }) async {
     final conditions = <String>['primary_account_id IS NULL'];
-    final params = <String, dynamic>{'limit': limit, 'offset': offset};
+
+    // countParams only contains params that appear in the WHERE clause.
+    final countParams = <String, dynamic>{};
+    // selectParams adds limit/offset on top.
+    final selectParams = <String, dynamic>{'limit': limit, 'offset': offset};
 
     if (activeOnly) conditions.add('is_active = 1');
     if (search != null && search.isNotEmpty) {
       conditions.add(
         '(full_name LIKE :search OR patient_code LIKE :search OR phone_e164 LIKE :search)',
       );
-      params['search'] = '%$search%';
+      countParams['search'] = '%$search%';
+      selectParams['search'] = '%$search%';
     }
 
-    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+    final where = 'WHERE ${conditions.join(' AND ')}';
 
     final countResult = await _pool.execute(
       'SELECT COUNT(*) as total FROM patients $where',
-      params,
+      countParams,
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
       '$_selectFields $where ORDER BY full_name LIMIT :limit OFFSET :offset',
-      params,
+      selectParams,
     );
 
     return (result.rows.map(_rowToMap).toList(), total);
