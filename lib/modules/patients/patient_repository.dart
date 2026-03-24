@@ -113,6 +113,7 @@ class PatientRepository {
     String? primaryAccountId,
     String? relationship,
   }) async {
+    // Patient + wallet are atomic; audit is best-effort outside the transaction.
     await _pool.transactional((conn) async {
       final primaryIdHex = primaryAccountId?.replaceAll('-', '');
       final primaryIdExpr = primaryIdHex != null
@@ -144,9 +145,12 @@ class PatientRepository {
           {'walletId': walletId, 'patientId': id},
         );
       }
+    });
 
+    // Audit outside transaction — failure must not roll back the patient record.
+    try {
       final auditId = generateUuid();
-      await conn.execute(
+      await _pool.execute(
         'INSERT INTO audit_log '
         '(audit_id, user_id, action, target_type, target_id, details) '
         "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:userId, '-', '')), "
@@ -157,7 +161,9 @@ class PatientRepository {
           'targetId': id,
         },
       );
-    });
+    } catch (_) {
+      // Audit failure is non-fatal.
+    }
 
     return (await findById(id))!;
   }
