@@ -136,8 +136,8 @@ class PatientRepository {
 
       if (walletId != null) {
         await conn.execute(
-          'INSERT INTO wallets (wallet_id, primary_patient_id) '
-          "VALUES (UNHEX(REPLACE(:walletId, '-', '')), UNHEX(REPLACE(:patientId, '-', '')))",
+          'INSERT INTO wallets (wallet_id, primary_patient_id, balance_shillings, status) '
+          "VALUES (UNHEX(REPLACE(:walletId, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), 0, 'ACTIVE')",
           {'walletId': walletId, 'patientId': id},
         );
       }
