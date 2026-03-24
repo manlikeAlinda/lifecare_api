@@ -39,18 +39,20 @@ class PatientCredentialsRepository {
     required String phoneE164,
     required String passwordHash,
     required String activationPinHash,
+    int mustChangePw = 1,
   }) async {
     await _pool.execute(
       'INSERT INTO patient_credentials '
       '(credential_id, patient_id, phone_e164, password_hash, activation_pin, status, must_change_pw) '
       'VALUES (${uuidParam('credentialId')}, ${uuidParam('patientId')}, '
-      ':phoneE164, :passwordHash, :activationPinHash, \'pending_activation\', 0)',
+      ':phoneE164, :passwordHash, :activationPinHash, \'pending_activation\', :mustChangePw)',
       {
         'credentialId': credentialId,
         'patientId': patientId,
         'phoneE164': phoneE164,
         'passwordHash': passwordHash,
         'activationPinHash': activationPinHash,
+        'mustChangePw': mustChangePw,
       },
     );
   }

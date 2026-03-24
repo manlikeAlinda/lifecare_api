@@ -42,6 +42,7 @@ class PatientCredentialsService {
         phoneE164: phoneE164,
         passwordHash: passwordHash,
         activationPinHash: pinHash,
+        mustChangePw: 1,
       );
     } else {
       await _repo.updateCredential(
