@@ -79,7 +79,7 @@ class UserService {
     if (user == null) throw ApiError.notFound('User not found');
 
     final newHash = BCrypt.hashpw(newPassword, BCrypt.gensalt());
-    await _repo.updatePassword(id, newHash, 'bcrypt');
+    await _repo.updatePassword(id, newHash);
   }
 
   Future<Map<String, dynamic>> getPreferences(String id) async {
