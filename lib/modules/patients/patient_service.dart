@@ -30,13 +30,18 @@ class PatientService {
     final fullName = data['full_name'] as String? ??
         '${data['first_name'] ?? ''} ${data['last_name'] ?? ''}'.trim();
 
+    final rawCode = (data['patient_code'] as String?)?.trim() ??
+        (data['patient_number'] as String?)?.trim();
+    final patientCode = (rawCode != null && rawCode.isNotEmpty)
+        ? rawCode
+        : 'LC-${id.replaceAll('-', '').substring(0, 6).toUpperCase()}';
+
     return _repo.create(
       id: id,
       walletId: walletId,
       fullName: fullName,
       createdBy: createdBy,
-      patientCode:
-          data['patient_code'] as String? ?? data['patient_number'] as String?,
+      patientCode: patientCode,
       phone: data['phone'] as String? ?? data['phone_e164'] as String?,
       nationalId: data['national_id'] as String?,
       accountType: data['account_type'] as String? ?? 'individual',
