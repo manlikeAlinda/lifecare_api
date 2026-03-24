@@ -103,16 +103,14 @@ class PatientCredentialsRepository {
     try {
       await _pool.execute(
         'INSERT INTO audit_log '
-        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
-        'VALUES (${uuidParam('auditId')}, ${uuidParam('actorId')}, '
-        ':actionType, :entityType, ${uuidParam('entityId')}, :requestId)',
+        '(audit_id, action, target_type, target_id, details) '
+        'VALUES (${uuidParam('auditId')}, '
+        ':action, :targetType, ${uuidParam('targetId')}, \'{}\')',
         {
           'auditId': generateUuid(),
-          'actorId': actorId,
-          'actionType': action,
-          'entityType': 'patient_credentials',
-          'entityId': patientId,
-          'requestId': generateUuid(),
+          'action': action,
+          'targetType': 'patient_credentials',
+          'targetId': patientId,
         },
       );
     } catch (_) {

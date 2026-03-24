@@ -186,7 +186,7 @@ class UserRepository {
   }) async {
     final countResult = await _pool.execute(
       'SELECT COUNT(*) as total FROM audit_log '
-      "WHERE actor_user_id = UNHEX(REPLACE(:userId, '-', ''))",
+      "WHERE user_id = UNHEX(REPLACE(:userId, '-', ''))",
       {'userId': userId},
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
@@ -196,10 +196,10 @@ class UserRepository {
       "LOWER(CONCAT(SUBSTR(HEX(audit_id),1,8),'-',SUBSTR(HEX(audit_id),9,4),'-',"
       "SUBSTR(HEX(audit_id),13,4),'-',SUBSTR(HEX(audit_id),17,4),'-',"
       "SUBSTR(HEX(audit_id),21))) AS id, "
-      'action_type, entity_type, request_id, created_at '
+      'action, target_type, timestamp, details '
       'FROM audit_log '
-      "WHERE actor_user_id = UNHEX(REPLACE(:userId, '-', '')) "
-      'ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+      "WHERE user_id = UNHEX(REPLACE(:userId, '-', '')) "
+      'ORDER BY timestamp DESC LIMIT :limit OFFSET :offset',
       {'userId': userId, 'limit': limit, 'offset': offset},
     );
 
