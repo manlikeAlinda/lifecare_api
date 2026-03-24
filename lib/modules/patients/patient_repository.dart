@@ -17,15 +17,16 @@ class PatientRepository {
       "SUBSTR(HEX(patient_id),13,4),'-',SUBSTR(HEX(patient_id),17,4),'-',"
       "SUBSTR(HEX(patient_id),21))) AS id";
 
+  // HEX(NULL) = NULL, so no IF() needed — NULLs propagate naturally.
   static const _primaryAccountUuid =
       "LOWER(CONCAT(SUBSTR(HEX(primary_account_id),1,8),'-',SUBSTR(HEX(primary_account_id),9,4),'-',"
       "SUBSTR(HEX(primary_account_id),13,4),'-',SUBSTR(HEX(primary_account_id),17,4),'-',"
-      "SUBSTR(HEX(primary_account_id),21))) AS primary_account_id";
+      "SUBSTR(HEX(primary_account_id),21)))";
 
   static const _selectFields =
       'SELECT $_uuidId, patient_code, full_name, phone_e164, national_id, '
       'is_active, created_at, account_type, relationship, '
-      'IF(primary_account_id IS NULL, NULL, $_primaryAccountUuid) '
+      '$_primaryAccountUuid AS primary_account_id '
       'FROM patients';
 
   // ── Primary-account list (excludes sub-patients) ───────────────────────────
