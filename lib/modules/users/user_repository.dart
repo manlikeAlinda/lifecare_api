@@ -7,8 +7,8 @@ class UserRepository {
 
   UserRepository(this._pool);
 
-  // Real DB columns: user_id (PK), username, display_name, email, phone_e164,
-  // password_hash (varbinary), password_alg, is_active, created_at
+  // Real DB columns: user_id (PK), username, display_name, email,
+  // password_hash (varbinary), is_active, created_at
   // Role is managed via user_roles + roles join table.
 
   static const _uuidHex_u_id =
@@ -19,7 +19,7 @@ class UserRepository {
   static const _baseSelect = 'SELECT '
       "$_uuidHex_u_id, "
       "u.username, u.display_name AS full_name, u.email, u.is_active, "
-      "u.last_login_at, u.created_at, "
+      "u.created_at, "
       "COALESCE(r.role_key, 'staff') AS role "
       'FROM users u '
       'LEFT JOIN user_roles ur ON ur.user_id = u.user_id '
@@ -89,8 +89,8 @@ class UserRepository {
     await _pool.transactional((conn) async {
       // Insert the user
       await conn.execute(
-        "INSERT INTO users (user_id, username, email, display_name, password_hash, password_alg) "
-        "VALUES (UNHEX(REPLACE(:id, '-', '')), :username, :email, :fullName, :passwordHash, 'bcrypt')",
+        "INSERT INTO users (user_id, username, email, display_name, password_hash) "
+        "VALUES (UNHEX(REPLACE(:id, '-', '')), :username, :email, :fullName, :passwordHash)",
         {
           'id': id,
           'username': username,
@@ -148,15 +148,11 @@ class UserRepository {
     return findById(id);
   }
 
-  Future<void> updatePassword(
-    String id,
-    String passwordHash,
-    String algorithm,
-  ) async {
+  Future<void> updatePassword(String id, String passwordHash) async {
     await _pool.execute(
-      'UPDATE users SET password_hash = :hash, password_alg = :algorithm '
+      'UPDATE users SET password_hash = :hash '
       "WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
-      {'hash': passwordHash, 'algorithm': algorithm, 'id': id},
+      {'hash': passwordHash, 'id': id},
     );
   }
 
