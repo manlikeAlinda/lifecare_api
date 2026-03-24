@@ -296,18 +296,17 @@ class EncounterRepository {
       // 6. Audit log.
       await conn.execute(
         'INSERT INTO audit_log '
-        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
+        '(audit_id, user_id, action, target_type, target_id, details) '
         "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
         "UNHEX(REPLACE(:actorId, '-', '')), "
-        ':actionType, :entityType, '
-        "UNHEX(REPLACE(:entityId, '-', '')), :requestId)",
+        ':action, :targetType, '
+        "UNHEX(REPLACE(:targetId, '-', '')), '{}')",
         {
           'auditId': generateUuid(),
           'actorId': createdBy,
-          'actionType': 'CREATE_ENCOUNTER',
-          'entityType': 'encounter',
-          'entityId': encounterId,
-          'requestId': generateUuid(),
+          'action': 'CREATE_ENCOUNTER',
+          'targetType': 'encounter',
+          'targetId': encounterId,
         },
       );
     });
@@ -344,18 +343,17 @@ class EncounterRepository {
       );
       await conn.execute(
         'INSERT INTO audit_log '
-        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
+        '(audit_id, user_id, action, target_type, target_id, details) '
         "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
         "UNHEX(REPLACE(:actorId, '-', '')), "
-        ':actionType, :entityType, '
-        "UNHEX(REPLACE(:entityId, '-', '')), :requestId)",
+        ':action, :targetType, '
+        "UNHEX(REPLACE(:targetId, '-', '')), '{}')",
         {
           'auditId': generateUuid(),
           'actorId': updatedBy,
-          'actionType': 'UPDATE_ENCOUNTER',
-          'entityType': 'encounter',
-          'entityId': id,
-          'requestId': generateUuid(),
+          'action': 'UPDATE_ENCOUNTER',
+          'targetType': 'encounter',
+          'targetId': id,
         },
       );
     });
