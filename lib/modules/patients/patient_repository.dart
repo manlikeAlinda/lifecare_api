@@ -7,18 +7,29 @@ class PatientRepository {
 
   PatientRepository(this._pool);
 
-  // Real DB columns: patient_id (PK), patient_code, full_name, phone_e164,
-  // national_id_hash, is_active, created_at, account_type
-  // No: first_name, last_name, date_of_birth, gender, email, address, created_by
+  // Real DB columns (post-migration 021):
+  //   patient_id, patient_code, full_name, phone_e164, national_id,
+  //   is_active, created_at, account_type,
+  //   primary_account_id (NULL = primary account, non-NULL = sub-patient),
+  //   relationship
 
   static const _uuidId =
       "LOWER(CONCAT(SUBSTR(HEX(patient_id),1,8),'-',SUBSTR(HEX(patient_id),9,4),'-',"
       "SUBSTR(HEX(patient_id),13,4),'-',SUBSTR(HEX(patient_id),17,4),'-',"
       "SUBSTR(HEX(patient_id),21))) AS id";
 
+  static const _uuidPrimaryAccountId =
+      "IF(primary_account_id IS NULL, NULL, "
+      "LOWER(CONCAT(SUBSTR(HEX(primary_account_id),1,8),'-',SUBSTR(HEX(primary_account_id),9,4),'-',"
+      "SUBSTR(HEX(primary_account_id),13,4),'-',SUBSTR(HEX(primary_account_id),17,4),'-',"
+      "SUBSTR(HEX(primary_account_id),21)))) AS primary_account_id";
+
   static const _selectFields =
-      'SELECT $_uuidId, patient_code, full_name, phone_e164, '
-      'is_active, created_at, account_type FROM patients';
+      'SELECT $_uuidId, patient_code, full_name, phone_e164, national_id, '
+      'is_active, created_at, account_type, $_uuidPrimaryAccountId, relationship '
+      'FROM patients';
+
+  // ── Primary-account list (excludes sub-patients) ───────────────────────────
 
   Future<(List<Map<String, dynamic>>, int)> findAll({
     int limit = 20,
@@ -26,7 +37,7 @@ class PatientRepository {
     String? search,
     bool activeOnly = true,
   }) async {
-    final conditions = <String>[];
+    final conditions = <String>['primary_account_id IS NULL'];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
 
     if (activeOnly) conditions.add('is_active = 1');
@@ -37,7 +48,7 @@ class PatientRepository {
       params['search'] = '%$search%';
     }
 
-    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+    final where = 'WHERE ${conditions.join(' AND ')}';
 
     final countResult = await _pool.execute(
       'SELECT COUNT(*) as total FROM patients $where',
@@ -71,37 +82,67 @@ class PatientRepository {
     return _rowToMap(result.rows.first);
   }
 
-  /// Creates a patient and automatically creates their wallet.
+  // ── Sub-patients (beneficiaries of a primary account) ─────────────────────
+
+  Future<List<Map<String, dynamic>>> findSubPatients(
+    String primaryAccountId,
+  ) async {
+    final result = await _pool.execute(
+      "$_selectFields WHERE primary_account_id = UNHEX(REPLACE(:id, '-', '')) "
+      'AND is_active = 1 ORDER BY full_name',
+      {'id': primaryAccountId},
+    );
+    return result.rows.map(_rowToMap).toList();
+  }
+
+  // ── Create ─────────────────────────────────────────────────────────────────
+
+  /// Creates a patient record.
+  ///
+  /// Pass [walletId] for primary accounts — a wallet row is created atomically.
+  /// Omit [walletId] for sub-patients (beneficiaries) — they share the primary
+  /// account's wallet and do NOT get their own.
   Future<Map<String, dynamic>> create({
     required String id,
     required String fullName,
     required String createdBy,
-    required String walletId,
+    String? walletId,
     String? patientCode,
     String? phone,
+    String? nationalId,
     String accountType = 'individual',
+    String? primaryAccountId,
+    String? relationship,
   }) async {
     await _pool.transactional((conn) async {
       await conn.execute(
         'INSERT INTO patients '
-        '(patient_id, patient_code, full_name, phone_e164, account_type) '
-        "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, :phone, :accountType)",
+        '(patient_id, patient_code, full_name, phone_e164, national_id, '
+        ' account_type, primary_account_id, relationship) '
+        "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
+        ':phone, :nationalId, :accountType, '
+        "IF(:primaryAccountId IS NULL, NULL, UNHEX(REPLACE(:primaryAccountId, '-', ''))), "
+        ':relationship)',
         {
           'id': id,
           'patientCode': patientCode,
           'fullName': fullName,
           'phone': phone,
+          'nationalId': nationalId,
           'accountType': accountType,
+          'primaryAccountId': primaryAccountId,
+          'relationship': relationship,
         },
       );
 
-      await conn.execute(
-        'INSERT INTO wallets (wallet_id, primary_patient_id) '
-        "VALUES (UNHEX(REPLACE(:walletId, '-', '')), UNHEX(REPLACE(:patientId, '-', '')))",
-        {'walletId': walletId, 'patientId': id},
-      );
+      if (walletId != null) {
+        await conn.execute(
+          'INSERT INTO wallets (wallet_id, primary_patient_id) '
+          "VALUES (UNHEX(REPLACE(:walletId, '-', '')), UNHEX(REPLACE(:patientId, '-', '')))",
+          {'walletId': walletId, 'patientId': id},
+        );
+      }
 
-      // Audit
       await conn.execute(
         'INSERT INTO audit_log (audit_id, user_id, action, target_type, target_id, details) '
         "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:userId, '-', '')), "
@@ -117,6 +158,8 @@ class PatientRepository {
     return (await findById(id))!;
   }
 
+  // ── Update ─────────────────────────────────────────────────────────────────
+
   Future<Map<String, dynamic>?> update(
     String id,
     Map<String, dynamic> fields,
@@ -128,7 +171,10 @@ class PatientRepository {
       'full_name',
       'phone_e164',
       'account_type',
-      'patient_code'
+      'patient_code',
+      'national_id',
+      'relationship',
+      'is_active',
     ];
     final setClauses =
         fields.keys.where(allowed.contains).map((k) => '$k = :$k').join(', ');
@@ -136,7 +182,6 @@ class PatientRepository {
     if (setClauses.isEmpty) return findById(id);
 
     final params = Map<String, dynamic>.from(fields)..['id'] = id;
-
     await _pool.execute(
       "UPDATE patients SET $setClauses WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
       params,
@@ -153,89 +198,19 @@ class PatientRepository {
     );
   }
 
-  // ── Dependents ──────────────────────────────────────────────────────────────
-  // The real DB dependents table uses wallet_id FK (not patient FK directly).
-  // We read via wallet → patient relationship.
+  // ── Legacy dependent methods (kept for reference; app now uses sub-patients) ─
 
-  Future<List<Map<String, dynamic>>> findDependents(String patientId) async {
-    final result = await _pool.execute(
-      'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(d.dependent_id),1,8),'-',SUBSTR(HEX(d.dependent_id),9,4),'-',"
-      "SUBSTR(HEX(d.dependent_id),13,4),'-',SUBSTR(HEX(d.dependent_id),17,4),'-',"
-      "SUBSTR(HEX(d.dependent_id),21))) AS id, "
-      'd.full_name, d.phone_number, d.relationship, d.national_id, d.is_active, d.created_at '
-      'FROM dependents d '
-      'JOIN wallets w ON d.wallet_id = w.wallet_id '
-      "WHERE w.primary_patient_id = UNHEX(REPLACE(:patientId, '-', '')) AND d.is_active = 1",
-      {'patientId': patientId},
-    );
-    return result.rows.map(_rowToMap).toList();
-  }
+  /// @deprecated Use findSubPatients instead.
+  Future<List<Map<String, dynamic>>> findDependents(String patientId) =>
+      findSubPatients(patientId);
 
-  Future<Map<String, dynamic>?> findDependentById(String depId) async {
-    final result = await _pool.execute(
-      'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(d.dependent_id),1,8),'-',SUBSTR(HEX(d.dependent_id),9,4),'-',"
-      "SUBSTR(HEX(d.dependent_id),13,4),'-',SUBSTR(HEX(d.dependent_id),17,4),'-',"
-      "SUBSTR(HEX(d.dependent_id),21))) AS id, "
-      'd.full_name, d.phone_number, d.relationship, d.national_id, d.is_active, d.created_at '
-      'FROM dependents d '
-      "WHERE d.dependent_id = UNHEX(REPLACE(:depId, '-', '')) AND d.is_active = 1 LIMIT 1",
-      {'depId': depId},
-    );
-    if (result.rows.isEmpty) return null;
-    return _rowToMap(result.rows.first);
-  }
+  /// @deprecated Use create with primaryAccountId instead.
+  Future<Map<String, dynamic>?> findDependentById(String depId) =>
+      findById(depId);
 
-  Future<Map<String, dynamic>> createDependent({
-    required String patientId,
-    required String depId,
-    required String fullName,
-    required String nationalId,
-    required String relationship,
-    String? phoneNumber,
-  }) async {
-    // wallet_id is resolved via the patient's wallet using a subquery.
-    await _pool.execute(
-      'INSERT INTO dependents (dependent_id, wallet_id, national_id, full_name, phone_number, relationship) '
-      "SELECT UNHEX(REPLACE(:depId, '-', '')), wallet_id, :nationalId, :fullName, :phone, :relationship "
-      "FROM wallets WHERE primary_patient_id = UNHEX(REPLACE(:patientId, '-', '')) LIMIT 1",
-      {
-        'depId': depId,
-        'patientId': patientId,
-        'nationalId': nationalId,
-        'fullName': fullName,
-        'phone': phoneNumber,
-        'relationship': relationship,
-      },
-    );
-    return (await findDependentById(depId))!;
-  }
-
-  Future<Map<String, dynamic>?> updateDependent(
-    String depId,
-    Map<String, dynamic> fields,
-  ) async {
-    const allowed = ['full_name', 'phone_number', 'relationship', 'national_id'];
-    final setClauses =
-        fields.keys.where(allowed.contains).map((k) => '$k = :$k').join(', ');
-    if (setClauses.isEmpty) return findDependentById(depId);
-
-    final params = Map<String, dynamic>.from(fields)..['depId'] = depId;
-    await _pool.execute(
-      "UPDATE dependents SET $setClauses WHERE dependent_id = UNHEX(REPLACE(:depId, '-', ''))",
-      params,
-    );
-    return findDependentById(depId);
-  }
-
-  Future<void> softDeleteDependent(String depId) async {
-    await _pool.execute(
-      'UPDATE dependents SET is_active = 0 '
-      "WHERE dependent_id = UNHEX(REPLACE(:depId, '-', ''))",
-      {'depId': depId},
-    );
-  }
+  /// @deprecated Use softDelete instead.
+  Future<void> softDeleteDependent(String depId) async =>
+      softDelete(depId, 'system');
 
   Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);
 }

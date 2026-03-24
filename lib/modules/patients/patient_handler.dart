@@ -81,14 +81,15 @@ class PatientHandler {
 
   Future<Response> createDependent(Request request, String patientId) async {
     final body = await parseJsonBody(request);
+    final caller = requireAuthUser(request);
 
     Validator(body)
       ..required('full_name')
       ..required('relationship')
-      ..phoneE164('phone_number')
+      ..phoneE164('phone_e164')
       ..throwIfInvalid();
 
-    final dep = await _service.createDependent(patientId, body);
+    final dep = await _service.createSubPatient(patientId, body, caller.id);
     return createdResponse(dep);
   }
 
@@ -98,7 +99,13 @@ class PatientHandler {
     String depId,
   ) async {
     final body = await parseJsonBody(request);
-    final dep = await _service.updateDependent(patientId, depId, body);
+    final caller = requireAuthUser(request);
+
+    Validator(body)
+      ..phoneE164('phone_e164')
+      ..throwIfInvalid();
+
+    final dep = await _service.updateSubPatient(depId, body, caller.id);
     return okResponse(dep);
   }
 
@@ -107,7 +114,8 @@ class PatientHandler {
     String patientId,
     String depId,
   ) async {
-    await _service.deleteDependent(patientId, depId);
+    final caller = requireAuthUser(request);
+    await _service.deleteSubPatient(depId, caller.id);
     return noContentResponse();
   }
 }

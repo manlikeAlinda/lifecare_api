@@ -27,7 +27,6 @@ class PatientService {
     final id = generateUuid();
     final walletId = generateUuid();
 
-    // Support both old API (first_name + last_name) and new API (full_name)
     final fullName = data['full_name'] as String? ??
         '${data['first_name'] ?? ''} ${data['last_name'] ?? ''}'.trim();
 
@@ -39,6 +38,7 @@ class PatientService {
       patientCode:
           data['patient_code'] as String? ?? data['patient_number'] as String?,
       phone: data['phone'] as String? ?? data['phone_e164'] as String?,
+      nationalId: data['national_id'] as String?,
       accountType: data['account_type'] as String? ?? 'individual',
     );
   }
@@ -54,7 +54,6 @@ class PatientService {
     return updated!;
   }
 
-  /// bulkUpdate is no longer supported with the simplified real-DB schema.
   Future<void> bulkUpdatePatients(
     List<Map<String, dynamic>> updates,
     String updatedBy,
@@ -74,44 +73,75 @@ class PatientService {
     await _repo.softDelete(id, deletedBy);
   }
 
-  // ── Dependents ──────────────────────────────────────────────────────────────
+  // ── Sub-patients (beneficiaries) ────────────────────────────────────────────
 
-  Future<List<Map<String, dynamic>>> listDependents(String patientId) async {
-    await _ensurePatientExists(patientId);
-    return _repo.findDependents(patientId);
+  Future<List<Map<String, dynamic>>> listSubPatients(
+    String primaryAccountId,
+  ) async {
+    await _ensurePatientExists(primaryAccountId);
+    return _repo.findSubPatients(primaryAccountId);
   }
+
+  Future<Map<String, dynamic>> createSubPatient(
+    String primaryAccountId,
+    Map<String, dynamic> data,
+    String createdBy,
+  ) async {
+    await _ensurePatientExists(primaryAccountId);
+
+    final primary = await _repo.findById(primaryAccountId);
+    final primaryCode = primary!['patient_code'] as String? ?? '';
+    final id = generateUuid();
+
+    // Auto-generate a sub-patient code from primary code + short suffix
+    final suffix = id.replaceAll('-', '').substring(0, 4).toUpperCase();
+    final autoCode = data['patient_code'] as String? ??
+        (primaryCode.isNotEmpty ? '$primaryCode-$suffix' : 'SUB-$suffix');
+
+    return _repo.create(
+      id: id,
+      walletId: null, // Sub-patients share primary account's wallet
+      fullName: data['full_name'] as String,
+      createdBy: createdBy,
+      patientCode: autoCode,
+      phone: data['phone_e164'] as String? ?? data['phone'] as String?,
+      nationalId: data['national_id'] as String?,
+      accountType: 'dependent',
+      primaryAccountId: primaryAccountId,
+      relationship: data['relationship'] as String? ?? 'Relative',
+    );
+  }
+
+  Future<Map<String, dynamic>> updateSubPatient(
+    String subPatientId,
+    Map<String, dynamic> data,
+    String updatedBy,
+  ) async {
+    final patient = await _repo.findById(subPatientId);
+    if (patient == null) throw ApiError.notFound('Beneficiary not found');
+    final updated = await _repo.update(subPatientId, data, updatedBy);
+    return updated!;
+  }
+
+  Future<void> deleteSubPatient(String subPatientId, String deletedBy) async {
+    final patient = await _repo.findById(subPatientId);
+    if (patient == null) throw ApiError.notFound('Beneficiary not found');
+    await _repo.softDelete(subPatientId, deletedBy);
+  }
+
+  // ── Legacy aliases (kept so old dependents routes still work) ───────────────
+
+  Future<List<Map<String, dynamic>>> listDependents(String patientId) =>
+      listSubPatients(patientId);
 
   Future<Map<String, dynamic>> createDependent(
     String patientId,
     Map<String, dynamic> data,
-  ) async {
-    await _ensurePatientExists(patientId);
-    return _repo.createDependent(
-      patientId: patientId,
-      depId: generateUuid(),
-      fullName: data['full_name'] as String,
-      nationalId: data['national_id'] as String? ?? '',
-      relationship: data['relationship'] as String,
-      phoneNumber: data['phone_number'] as String?,
-    );
-  }
+    String createdBy,
+  ) =>
+      createSubPatient(patientId, data, createdBy);
 
-  Future<Map<String, dynamic>> updateDependent(
-    String patientId,
-    String depId,
-    Map<String, dynamic> data,
-  ) async {
-    final dep = await _repo.findDependentById(depId);
-    if (dep == null) throw ApiError.notFound('Dependent not found');
-    final updated = await _repo.updateDependent(depId, data);
-    return updated!;
-  }
-
-  Future<void> deleteDependent(String patientId, String depId) async {
-    final dep = await _repo.findDependentById(depId);
-    if (dep == null) throw ApiError.notFound('Dependent not found');
-    await _repo.softDeleteDependent(depId);
-  }
+  // ── Private ──────────────────────────────────────────────────────────────────
 
   Future<void> _ensurePatientExists(String patientId) async {
     final patient = await _repo.findById(patientId);
