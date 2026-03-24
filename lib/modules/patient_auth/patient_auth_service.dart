@@ -93,10 +93,13 @@ class PatientAuthService {
     final patient = await _repo.findPatientById(patientId);
     final patientCode = patient?['patient_code'] as String? ?? patientId;
 
+    final mustChangePw = credential['must_change_pw'] == true;
+
     final (accessToken, refreshToken, _) = await _createSession(
       patientId: patientId,
       phone: phone,
       patientCode: patientCode,
+      mustChangePw: mustChangePw,
     );
 
     await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_LOGIN');
@@ -109,8 +112,7 @@ class PatientAuthService {
       'patient_code': patientCode,
     };
 
-    final mustChangePw = credential['must_change_pw'];
-    if (mustChangePw == true) {
+    if (mustChangePw) {
       response['must_change_password'] = true;
     }
 
@@ -191,11 +193,13 @@ class PatientAuthService {
     required String patientId,
     required String phone,
     required String patientCode,
+    bool mustChangePw = false,
   }) async {
     final accessToken = await _authService.issuePatientAccessToken(
       patientId: patientId,
       phone: phone,
       patientCode: patientCode,
+      mustChangePw: mustChangePw,
     );
 
     final refreshToken = _generateRefreshToken();

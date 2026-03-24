@@ -143,15 +143,18 @@ class AuthService {
     required String patientId,
     required String phone,
     required String patientCode,
+    bool mustChangePw = false,
   }) async {
-    final jwt = JWT({
+    final payload = <String, dynamic>{
       'sub': patientId,
       'sub_type': 'patient',
       'phone': phone,
       'patient_code': patientCode,
       'type': 'access',
       'iat': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    });
+    };
+    if (mustChangePw) payload['must_change_pw'] = true;
+    final jwt = JWT(payload);
     return jwt.sign(
       SecretKey(AppConfig.jwtSecret),
       expiresIn: Duration(minutes: AppConfig.jwtAccessExpiryMinutes),

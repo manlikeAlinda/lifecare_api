@@ -406,11 +406,11 @@ Handler buildApp() {
   );
 
   // ── Patient Auth (public) ─────────────────────────────────────────────────────
-  router.post('/v1/patient-auth/activate', patientAuthHandler.activate);
-  router.post('/v1/patient-auth/login', patientAuthHandler.login);
-  router.post('/v1/patient-auth/refresh', patientAuthHandler.refresh);
-  router.post('/v1/patient-auth/logout', patientAuthHandler.logout);
-  router.post('/v1/patient-auth/change-password', patientAuthHandler.changePassword);
+  router.post('/v1/patient/auth/activate', patientAuthHandler.activate);
+  router.post('/v1/patient/auth/login', patientAuthHandler.login);
+  router.post('/v1/patient/auth/refresh', patientAuthHandler.refresh);
+  router.post('/v1/patient/auth/logout', patientAuthHandler.logout);
+  router.post('/v1/patient/auth/change-password', patientAuthHandler.changePassword);
 
   // ── Admin — Patient Credential Management ─────────────────────────────────────
   router.post(
