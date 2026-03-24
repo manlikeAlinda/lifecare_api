@@ -7,26 +7,20 @@ class PatientRepository {
 
   PatientRepository(this._pool);
 
-  // Real DB columns (post-migration 021):
-  //   patient_id, patient_code, full_name, phone_e164, national_id,
-  //   is_active, created_at, account_type,
-  //   primary_account_id (NULL = primary account, non-NULL = sub-patient),
-  //   relationship
+  // Live DB columns (u524585165_lifecare):
+  //   patient_id, patient_code, full_name, phone_e164, national_id_hash,
+  //   is_active, created_at, account_type
+  // NOTE: national_id, primary_account_id, relationship added by migration 021
+  // — omitted here until that migration is applied to the live DB.
 
   static const _uuidId =
       "LOWER(CONCAT(SUBSTR(HEX(patient_id),1,8),'-',SUBSTR(HEX(patient_id),9,4),'-',"
       "SUBSTR(HEX(patient_id),13,4),'-',SUBSTR(HEX(patient_id),17,4),'-',"
       "SUBSTR(HEX(patient_id),21))) AS id";
 
-  static const _uuidPrimaryAccountId =
-      "IF(primary_account_id IS NULL, NULL, "
-      "LOWER(CONCAT(SUBSTR(HEX(primary_account_id),1,8),'-',SUBSTR(HEX(primary_account_id),9,4),'-',"
-      "SUBSTR(HEX(primary_account_id),13,4),'-',SUBSTR(HEX(primary_account_id),17,4),'-',"
-      "SUBSTR(HEX(primary_account_id),21)))) AS primary_account_id";
-
   static const _selectFields =
-      'SELECT $_uuidId, patient_code, full_name, phone_e164, national_id, '
-      'is_active, created_at, account_type, $_uuidPrimaryAccountId, relationship '
+      'SELECT $_uuidId, patient_code, full_name, phone_e164, '
+      'is_active, created_at, account_type '
       'FROM patients';
 
   // ── Primary-account list (excludes sub-patients) ───────────────────────────
@@ -37,7 +31,8 @@ class PatientRepository {
     String? search,
     bool activeOnly = true,
   }) async {
-    final conditions = <String>['primary_account_id IS NULL'];
+    // primary_account_id added by migration 021 — skip filter until applied.
+    final conditions = <String>[];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
 
     if (activeOnly) conditions.add('is_active = 1');
@@ -48,7 +43,7 @@ class PatientRepository {
       params['search'] = '%$search%';
     }
 
-    final where = 'WHERE ${conditions.join(' AND ')}';
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
 
     final countResult = await _pool.execute(
       'SELECT COUNT(*) as total FROM patients $where',
@@ -87,12 +82,8 @@ class PatientRepository {
   Future<List<Map<String, dynamic>>> findSubPatients(
     String primaryAccountId,
   ) async {
-    final result = await _pool.execute(
-      "$_selectFields WHERE primary_account_id = UNHEX(REPLACE(:id, '-', '')) "
-      'AND is_active = 1 ORDER BY full_name',
-      {'id': primaryAccountId},
-    );
-    return result.rows.map(_rowToMap).toList();
+    // primary_account_id column added by migration 021 — returns empty until applied.
+    return [];
   }
 
   // ── Create ─────────────────────────────────────────────────────────────────
@@ -117,21 +108,15 @@ class PatientRepository {
     await _pool.transactional((conn) async {
       await conn.execute(
         'INSERT INTO patients '
-        '(patient_id, patient_code, full_name, phone_e164, national_id, '
-        ' account_type, primary_account_id, relationship) '
+        '(patient_id, patient_code, full_name, phone_e164, account_type) '
         "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
-        ':phone, :nationalId, :accountType, '
-        "IF(:primaryAccountId IS NULL, NULL, UNHEX(REPLACE(:primaryAccountId, '-', ''))), "
-        ':relationship)',
+        ':phone, :accountType)',
         {
           'id': id,
           'patientCode': patientCode,
           'fullName': fullName,
           'phone': phone,
-          'nationalId': nationalId,
           'accountType': accountType,
-          'primaryAccountId': primaryAccountId,
-          'relationship': relationship,
         },
       );
 
@@ -143,14 +128,17 @@ class PatientRepository {
         );
       }
 
+      final auditId = generateUuid();
       await conn.execute(
-        'INSERT INTO audit_log (audit_id, user_id, action, target_type, target_id, details) '
+        'INSERT INTO audit_log '
+        '(audit_id, actor_user_id, action_type, entity_type, entity_id, request_id) '
         "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:userId, '-', '')), "
-        "  'create_patient', 'patient', UNHEX(REPLACE(:targetId, '-', '')), '{}')",
+        "  'create_patient', 'patient', UNHEX(REPLACE(:targetId, '-', '')), :requestId)",
         {
-          'auditId': generateUuid(),
+          'auditId': auditId,
           'userId': createdBy,
           'targetId': id,
+          'requestId': auditId,
         },
       );
     });
