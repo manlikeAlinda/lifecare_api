@@ -114,14 +114,18 @@ class PatientRepository {
     String? relationship,
   }) async {
     await _pool.transactional((conn) async {
+      final primaryIdHex = primaryAccountId?.replaceAll('-', '');
+      final primaryIdExpr = primaryIdHex != null
+          ? "UNHEX('$primaryIdHex')"
+          : 'NULL';
+
       await conn.execute(
         'INSERT INTO patients '
         '(patient_id, patient_code, full_name, phone_e164, national_id, '
         ' account_type, primary_account_id, relationship) '
         "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
         ':phone, :nationalId, :accountType, '
-        "IF(:primaryAccountId IS NULL, NULL, UNHEX(REPLACE(:primaryAccountId, '-', ''))), "
-        ':relationship)',
+        '$primaryIdExpr, :relationship)',
         {
           'id': id,
           'patientCode': patientCode,
@@ -129,7 +133,6 @@ class PatientRepository {
           'phone': phone,
           'nationalId': nationalId,
           'accountType': accountType,
-          'primaryAccountId': primaryAccountId,
           'relationship': relationship,
         },
       );
