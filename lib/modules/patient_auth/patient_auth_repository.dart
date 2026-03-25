@@ -97,7 +97,7 @@ class PatientAuthRepository {
   Future<void> updatePassword(String patientId, String passwordHash) async {
     await _pool.execute(
       'UPDATE patient_credentials '
-      'SET password_hash = :passwordHash, must_change_pw = 0 '
+      "SET password_hash = :passwordHash, status = 'active', must_change_pw = 0 "
       'WHERE ${uuidWhere('patient_id', 'patientId')}',
       {'passwordHash': passwordHash, 'patientId': patientId},
     );
