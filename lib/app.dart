@@ -482,9 +482,13 @@ Middleware _errorHandlingMiddleware() {
         final requestId = getRequestId(request);
         return errorResponse(e, requestId);
       } catch (e, stack) {
-        log.severe('Unhandled error', e, stack);
+        log.severe('Unhandled error on ${request.method} ${request.url}', e, stack);
         final requestId = getRequestId(request);
-        return errorResponse(ApiError.internal(), requestId);
+        // Include raw error detail so the client can surface it during development.
+        return errorResponse(
+          ApiError.internal('Internal error: $e'),
+          requestId,
+        );
       }
     };
   };
