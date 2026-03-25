@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
@@ -120,38 +121,48 @@ class PatientRepository {
     String? relationship,
   }) async {
     // Patient + wallet are atomic; audit is best-effort outside the transaction.
-    await _pool.transactional((conn) async {
-      final primaryIdHex = primaryAccountId?.replaceAll('-', '');
-      final primaryIdExpr = primaryIdHex != null
-          ? "UNHEX('$primaryIdHex')"
-          : 'NULL';
+    try {
+      await _pool.transactional((conn) async {
+        final primaryIdHex = primaryAccountId?.replaceAll('-', '');
+        final primaryIdExpr = primaryIdHex != null
+            ? "UNHEX('$primaryIdHex')"
+            : 'NULL';
 
-      await conn.execute(
-        'INSERT INTO patients '
-        '(patient_id, patient_code, full_name, phone_e164, national_id, '
-        ' account_type, primary_account_id, relationship) '
-        "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
-        ':phone, :nationalId, :accountType, '
-        '$primaryIdExpr, :relationship)',
-        {
-          'id': id,
-          'patientCode': patientCode,
-          'fullName': fullName,
-          'phone': phone,
-          'nationalId': nationalId,
-          'accountType': accountType,
-          'relationship': relationship,
-        },
-      );
-
-      if (walletId != null) {
         await conn.execute(
-          'INSERT INTO wallets (wallet_id, primary_patient_id, balance_shillings, status) '
-          "VALUES (UNHEX(REPLACE(:walletId, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), 0, 'ACTIVE')",
-          {'walletId': walletId, 'patientId': id},
+          'INSERT INTO patients '
+          '(patient_id, patient_code, full_name, phone_e164, national_id, '
+          ' account_type, primary_account_id, relationship) '
+          "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
+          ':phone, :nationalId, :accountType, '
+          '$primaryIdExpr, :relationship)',
+          {
+            'id': id,
+            'patientCode': patientCode,
+            'fullName': fullName,
+            'phone': phone,
+            'nationalId': nationalId,
+            'accountType': accountType,
+            'relationship': relationship,
+          },
         );
+
+        if (walletId != null) {
+          await conn.execute(
+            'INSERT INTO wallets (wallet_id, primary_patient_id, balance_shillings, status) '
+            "VALUES (UNHEX(REPLACE(:walletId, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), 0, 'ACTIVE')",
+            {'walletId': walletId, 'patientId': id},
+          );
+        }
+      });
+    } catch (e) {
+      if (e.toString().contains('1062')) {
+        final field = e.toString().contains('patient_code')
+            ? 'Account Code'
+            : 'Phone Number';
+        throw ApiError.conflict('$field is already in use');
       }
-    });
+      rethrow;
+    }
 
     // Audit outside transaction — failure must not roll back the patient record.
     try {
@@ -206,12 +217,83 @@ class PatientRepository {
     return findById(id);
   }
 
-  Future<void> softDelete(String id, String deletedBy) async {
-    await _pool.execute(
-      'UPDATE patients SET is_active = 0 '
-      "WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
-      {'id': id},
-    );
+  /// Hard-deletes a patient and ALL related records.
+  ///
+  /// Delete order (avoids FK violations):
+  ///   1. patient_sessions + patient_credentials (sub-patients + primary)
+  ///   2. encounters (cascade-deletes encounter_services/medications/drugs)
+  ///   3. wallet_ledger + provider_transactions + wallets
+  ///   4. sub-patients, then the primary patient row
+  Future<void> hardDelete(String id) async {
+    final hex = id.replaceAll('-', '');
+
+    try {
+      await _pool.transactional((conn) async {
+        // 1. Collect sub-patient hex IDs.
+        final subResult = await conn.execute(
+          "SELECT HEX(patient_id) AS pid FROM patients "
+          "WHERE primary_account_id = UNHEX('$hex')",
+          {},
+        );
+        final subHexIds = subResult.rows
+            .map((r) => r.assoc()['pid'] ?? '')
+            .where((s) => s.isNotEmpty)
+            .toList();
+
+        for (final pid in [hex, ...subHexIds]) {
+          await conn.execute(
+            "DELETE FROM patient_sessions WHERE patient_id = UNHEX('$pid')",
+            {},
+          );
+          await conn.execute(
+            "DELETE FROM patient_credentials WHERE patient_id = UNHEX('$pid')",
+            {},
+          );
+          // encounter_services/medications/drugs cascade from encounter.
+          await conn.execute(
+            "DELETE FROM encounters WHERE patient_id = UNHEX('$pid')",
+            {},
+          );
+        }
+
+        // 2. Wallet chain (primary account only; sub-patients share it).
+        await conn.execute(
+          "DELETE wl FROM wallet_ledger wl "
+          "INNER JOIN wallets w ON wl.wallet_id = w.wallet_id "
+          "WHERE w.primary_patient_id = UNHEX('$hex')",
+          {},
+        );
+        await conn.execute(
+          "DELETE pt FROM provider_transactions pt "
+          "INNER JOIN wallets w ON pt.wallet_id = w.wallet_id "
+          "WHERE w.primary_patient_id = UNHEX('$hex')",
+          {},
+        );
+        await conn.execute(
+          "DELETE FROM wallets WHERE primary_patient_id = UNHEX('$hex')",
+          {},
+        );
+
+        // 3. Sub-patients first (FK), then primary.
+        await conn.execute(
+          "DELETE FROM patients WHERE primary_account_id = UNHEX('$hex')",
+          {},
+        );
+        await conn.execute(
+          "DELETE FROM patients WHERE patient_id = UNHEX('$hex')",
+          {},
+        );
+      });
+    } catch (e) {
+      // Surface duplicate-key violations as 409 instead of 500.
+      if (e.toString().contains('1062')) {
+        final field = e.toString().contains('patient_code')
+            ? 'Account Code'
+            : 'Phone Number';
+        throw ApiError.conflict('$field is already in use by another patient');
+      }
+      rethrow;
+    }
   }
 
   // ── Legacy dependent methods (kept for reference; app now uses sub-patients) ─
@@ -223,10 +305,6 @@ class PatientRepository {
   /// @deprecated Use create with primaryAccountId instead.
   Future<Map<String, dynamic>?> findDependentById(String depId) =>
       findById(depId);
-
-  /// @deprecated Use softDelete instead.
-  Future<void> softDeleteDependent(String depId) async =>
-      softDelete(depId, 'system');
 
   Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);
 }
