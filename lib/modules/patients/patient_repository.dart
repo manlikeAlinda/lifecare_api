@@ -1,6 +1,4 @@
 import 'package:mysql_client/mysql_client.dart';
-import 'package:mysql_client/exception.dart';
-import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
@@ -122,7 +120,6 @@ class PatientRepository {
     String? relationship,
   }) async {
     // Patient + wallet are atomic; audit is best-effort outside the transaction.
-    try {
     await _pool.transactional((conn) async {
       final primaryIdHex = primaryAccountId?.replaceAll('-', '');
       final primaryIdExpr = primaryIdHex != null
@@ -155,14 +152,6 @@ class PatientRepository {
         );
       }
     });
-    } on MySQLServerException catch (e) {
-      // 1062 = Duplicate entry — surface as a 409 so the client can show a message.
-      if (e.errorCode == 1062) {
-        final field = e.message.contains('patient_code') ? 'Account Code' : 'Phone Number';
-        throw ApiError.conflict('$field is already in use by another patient');
-      }
-      rethrow;
-    }
 
     // Audit outside transaction — failure must not roll back the patient record.
     try {
