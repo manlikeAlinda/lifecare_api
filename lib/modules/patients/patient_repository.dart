@@ -217,73 +217,12 @@ class PatientRepository {
     return findById(id);
   }
 
-  /// Hard-deletes a patient and ALL related records.
-  ///
-  /// Delete order (avoids FK violations):
-  ///   1. patient_sessions  (sub-patients + primary)
-  ///   2. patient_credentials (sub-patients + primary)
-  ///   3. encounters + children (sub-patients + primary; children cascade)
-  ///   4. wallet_ledger → wallets (primary only; sub-patients share this wallet)
-  ///   5. provider_transactions on this wallet (if table exists)
-  ///   6. DELETE patients WHERE primary_account_id = X  (sub-patients)
-  ///   7. DELETE patients WHERE patient_id = X          (primary)
-  Future<void> hardDelete(String id) async {
-    final hex = id.replaceAll('-', '');
-
-    await _pool.transactional((conn) async {
-      // 1. Collect sub-patient IDs so we can delete their dependent rows.
-      final subResult = await conn.execute(
-        "SELECT HEX(patient_id) AS pid FROM patients "
-        "WHERE primary_account_id = UNHEX('$hex')",
-      );
-      final subHexIds = subResult.rows
-          .map((r) => r.assoc()['pid'] ?? '')
-          .where((s) => s.isNotEmpty)
-          .toList();
-
-      final allHexIds = [hex, ...subHexIds];
-
-      for (final pid in allHexIds) {
-        // 2. Sessions
-        await conn.execute(
-          "DELETE FROM patient_sessions WHERE patient_id = UNHEX('$pid')",
-        );
-        // 3. Credentials
-        await conn.execute(
-          "DELETE FROM patient_credentials WHERE patient_id = UNHEX('$pid')",
-        );
-        // 4. Encounters (encounter_services / encounter_medications / encounter_drugs
-        //    all have ON DELETE CASCADE on encounter_id, so they go automatically).
-        await conn.execute(
-          "DELETE FROM encounters WHERE patient_id = UNHEX('$pid')",
-        );
-      }
-
-      // 5. Wallet ledger entries then the wallet itself
-      //    (wallet belongs to the primary account; sub-patients share it).
-      await conn.execute(
-        "DELETE wl FROM wallet_ledger wl "
-        "INNER JOIN wallets w ON wl.wallet_id = w.wallet_id "
-        "WHERE w.primary_patient_id = UNHEX('$hex')",
-      );
-      // provider_transactions also references wallet_id — delete if present.
-      await conn.execute(
-        "DELETE pt FROM provider_transactions pt "
-        "INNER JOIN wallets w ON pt.wallet_id = w.wallet_id "
-        "WHERE w.primary_patient_id = UNHEX('$hex')",
-      );
-      await conn.execute(
-        "DELETE FROM wallets WHERE primary_patient_id = UNHEX('$hex')",
-      );
-
-      // 6 & 7. Sub-patients first (FK), then primary.
-      await conn.execute(
-        "DELETE FROM patients WHERE primary_account_id = UNHEX('$hex')",
-      );
-      await conn.execute(
-        "DELETE FROM patients WHERE patient_id = UNHEX('$hex')",
-      );
-    });
+  Future<void> softDelete(String id, String deletedBy) async {
+    await _pool.execute(
+      'UPDATE patients SET is_active = 0 '
+      "WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
+      {'id': id},
+    );
   }
 
   // ── Legacy dependent methods (kept for reference; app now uses sub-patients) ─
@@ -296,9 +235,9 @@ class PatientRepository {
   Future<Map<String, dynamic>?> findDependentById(String depId) =>
       findById(depId);
 
-  /// @deprecated Use hardDelete instead.
+  /// @deprecated Use softDelete instead.
   Future<void> softDeleteDependent(String depId) async =>
-      hardDelete(depId);
+      softDelete(depId, 'system');
 
   Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);
 }
