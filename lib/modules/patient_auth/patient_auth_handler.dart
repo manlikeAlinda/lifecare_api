@@ -13,17 +13,41 @@ class PatientAuthHandler {
   PatientAuthHandler(this._service);
 
   Future<Response> activate(Request request) async {
-    final body = await parseJsonBody(request);
+    // Identity is proved by the JWT issued at login (must_change_pw = true).
+    final authHeader = request.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
+      return Response(401,
+          body: jsonEncode({'error': 'Authentication required'}),
+          headers: {'content-type': 'application/json'});
+    }
 
+    String patientId;
+    try {
+      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
+      final payload = jwt.payload as Map<String, dynamic>;
+      if (payload['sub_type'] != 'patient') {
+        return Response(403,
+            body: jsonEncode({'error': 'Patient token required'}),
+            headers: {'content-type': 'application/json'});
+      }
+      patientId = payload['sub'] as String;
+    } on JWTExpiredException {
+      return Response(401,
+          body: jsonEncode({'error': 'Token expired'}),
+          headers: {'content-type': 'application/json'});
+    } on JWTException {
+      return Response(401,
+          body: jsonEncode({'error': 'Invalid token'}),
+          headers: {'content-type': 'application/json'});
+    }
+
+    final body = await parseJsonBody(request);
     Validator(body)
-      ..required('phone')
-      ..required('pin')
       ..required('new_password')
       ..throwIfInvalid();
 
-    final result = await _service.activate(
-      phone: body['phone'] as String,
-      pin: body['pin'] as String,
+    final result = await _service.activateWithToken(
+      patientId: patientId,
       newPassword: body['new_password'] as String,
     );
 

@@ -1,5 +1,8 @@
+import 'dart:convert';
+import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
+import 'package:lifecare_api/core/config/app_config.dart';
 import 'package:lifecare_api/core/database/database.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/logging/logger.dart';
@@ -411,6 +414,72 @@ Handler buildApp() {
   router.post('/v1/patient/auth/refresh', patientAuthHandler.refresh);
   router.post('/v1/patient/auth/logout', patientAuthHandler.logout);
   router.post('/v1/patient/auth/change-password', patientAuthHandler.changePassword);
+
+  // ── Patient self-service endpoints ────────────────────────────────────────────
+  router.get('/v1/patient/wallet', (Request req) async {
+    final authHeader = req.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
+      return Response(401,
+          body: jsonEncode({'error': 'Authentication required'}),
+          headers: {'content-type': 'application/json'});
+    }
+    String patientId;
+    try {
+      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
+      final payload = jwt.payload as Map<String, dynamic>;
+      if (payload['sub_type'] != 'patient') {
+        return Response(403,
+            body: jsonEncode({'error': 'Patient token required'}),
+            headers: {'content-type': 'application/json'});
+      }
+      patientId = payload['sub'] as String;
+    } on JWTExpiredException {
+      return Response(401,
+          body: jsonEncode({'error': 'Access token has expired'}),
+          headers: {'content-type': 'application/json'});
+    } on JWTException {
+      return Response(401,
+          body: jsonEncode({'error': 'Invalid token'}),
+          headers: {'content-type': 'application/json'});
+    }
+    final wallet = await walletService.getWalletByPatient(patientId);
+    return okResponse(wallet);
+  });
+
+  router.get('/v1/patient/me', (Request req) async {
+    final authHeader = req.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
+      return Response(401,
+          body: jsonEncode({'error': 'Authentication required'}),
+          headers: {'content-type': 'application/json'});
+    }
+    String patientId;
+    try {
+      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
+      final payload = jwt.payload as Map<String, dynamic>;
+      if (payload['sub_type'] != 'patient') {
+        return Response(403,
+            body: jsonEncode({'error': 'Patient token required'}),
+            headers: {'content-type': 'application/json'});
+      }
+      patientId = payload['sub'] as String;
+    } on JWTExpiredException {
+      return Response(401,
+          body: jsonEncode({'error': 'Access token has expired'}),
+          headers: {'content-type': 'application/json'});
+    } on JWTException {
+      return Response(401,
+          body: jsonEncode({'error': 'Invalid token'}),
+          headers: {'content-type': 'application/json'});
+    }
+    final patient = await patientRepository.findById(patientId);
+    if (patient == null) {
+      return Response(404,
+          body: jsonEncode({'error': 'Patient not found'}),
+          headers: {'content-type': 'application/json'});
+    }
+    return okResponse(patient);
+  });
 
   // ── Admin — Patient Credential Management ─────────────────────────────────────
   router.post(
