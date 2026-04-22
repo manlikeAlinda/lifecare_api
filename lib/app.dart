@@ -472,7 +472,7 @@ Handler buildApp() {
           body: jsonEncode({'error': 'Invalid token'}),
           headers: {'content-type': 'application/json'});
     }
-    final patient = await patientRepository.findById(patientId);
+    final patient = await patientRepo.findById(patientId);
     if (patient == null) {
       return Response(404,
           body: jsonEncode({'error': 'Patient not found'}),
