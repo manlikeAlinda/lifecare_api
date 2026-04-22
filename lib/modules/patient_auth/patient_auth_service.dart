@@ -62,6 +62,42 @@ class PatientAuthService {
     };
   }
 
+  /// Called from the first-login activation screen.
+  /// Identity is already proved by the JWT — no PIN re-entry required.
+  Future<Map<String, dynamic>> activateWithToken({
+    required String patientId,
+    required String newPassword,
+  }) async {
+    final credential = await _repo.findCredentialByPatientId(patientId);
+    if (credential == null) throw ApiError.notFound('Credentials not found');
+
+    _validatePassword(newPassword);
+
+    final newHash = BCrypt.hashpw(newPassword, BCrypt.gensalt(logRounds: 12));
+    await _repo.updatePassword(patientId, newHash);
+
+    await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_ACTIVATE');
+
+    final patient = await _repo.findPatientById(patientId);
+    final patientCode = patient?['patient_code'] as String? ?? patientId;
+    final phone = patient?['phone_e164'] as String? ?? '';
+
+    final (accessToken, refreshToken, _) = await _createSession(
+      patientId: patientId,
+      phone: phone,
+      patientCode: patientCode,
+      mustChangePw: false,
+    );
+
+    return {
+      'access_token': accessToken,
+      'refresh_token': refreshToken,
+      'expires_in': AppConfig.jwtAccessExpiryMinutes * 60,
+      'patient_id': patientId,
+      'patient_code': patientCode,
+    };
+  }
+
   Future<Map<String, dynamic>> login({
     required String phone,
     required String password,
