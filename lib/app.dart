@@ -481,6 +481,70 @@ Handler buildApp() {
     return okResponse(patient);
   });
 
+  router.get('/v1/patient/visits', (Request req) async {
+    final authHeader = req.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
+      return Response(401,
+          body: jsonEncode({'error': 'Authentication required'}),
+          headers: {'content-type': 'application/json'});
+    }
+    String patientId;
+    try {
+      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
+      final payload = jwt.payload as Map<String, dynamic>;
+      if (payload['sub_type'] != 'patient') {
+        return Response(403,
+            body: jsonEncode({'error': 'Patient token required'}),
+            headers: {'content-type': 'application/json'});
+      }
+      patientId = payload['sub'] as String;
+    } on JWTExpiredException {
+      return Response(401,
+          body: jsonEncode({'error': 'Access token has expired'}),
+          headers: {'content-type': 'application/json'});
+    } on JWTException {
+      return Response(401,
+          body: jsonEncode({'error': 'Invalid token'}),
+          headers: {'content-type': 'application/json'});
+    }
+
+    final qp = req.url.queryParameters;
+    final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
+    final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
+    final dateFrom = qp['dateFrom'];
+    final dateTo   = qp['dateTo'];
+
+    final (encounters, total) = await encounterService.listEncounters(
+      patientId: patientId,
+      limit: limit,
+      offset: offset,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+
+    final visits = encounters.map((e) {
+      final svcs = (e['services'] as List?)
+          ?.map((s) => (s as Map<String, dynamic>)['name'] as String? ?? '')
+          .where((n) => n.isNotEmpty)
+          .join(', ');
+      return {
+        'visitId':        e['id'],
+        'referenceValue': e['reference_number'] ?? '',
+        'totalMinor':     (((e['total_cost'] as num?) ?? 0) * 100).toInt(),
+        'currency':       'UGX',
+        'services':       (svcs != null && svcs.isNotEmpty) ? svcs : null,
+        'encounterRef':   null,
+        'createdAt':      e['visited_at']?.toString() ?? e['created_at']?.toString() ?? '',
+        'status':         e['status'] ?? '',
+      };
+    }).toList();
+
+    return Response.ok(
+      jsonEncode({'data': {'visits': visits, 'total': total}}),
+      headers: {'content-type': 'application/json'},
+    );
+  });
+
   // ── Admin — Patient Credential Management ─────────────────────────────────────
   router.post(
     '/v1/admin/patient-credentials/<patientId>/generate',
