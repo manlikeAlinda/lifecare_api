@@ -545,6 +545,124 @@ Handler buildApp() {
     );
   });
 
+  router.get('/v1/patient/transactions', (Request req) async {
+    final authHeader = req.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
+      return Response(401,
+          body: jsonEncode({'error': 'Authentication required'}),
+          headers: {'content-type': 'application/json'});
+    }
+    String patientId;
+    try {
+      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
+      final payload = jwt.payload as Map<String, dynamic>;
+      if (payload['sub_type'] != 'patient') {
+        return Response(403,
+            body: jsonEncode({'error': 'Patient token required'}),
+            headers: {'content-type': 'application/json'});
+      }
+      patientId = payload['sub'] as String;
+    } on JWTExpiredException {
+      return Response(401,
+          body: jsonEncode({'error': 'Access token has expired'}),
+          headers: {'content-type': 'application/json'});
+    } on JWTException {
+      return Response(401,
+          body: jsonEncode({'error': 'Invalid token'}),
+          headers: {'content-type': 'application/json'});
+    }
+
+    final qp = req.url.queryParameters;
+    final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
+    final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
+
+    final wallet = await walletRepo.findByPatientId(patientId);
+    if (wallet == null) {
+      return Response.ok(
+        jsonEncode({'data': {'transactions': [], 'total': 0}}),
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    final walletId = wallet['id'] as String;
+
+    final (entries, total) =
+        await walletRepo.getLedger(walletId, limit: limit, offset: offset);
+
+    final transactions = entries.map((e) {
+      final type = (e['type'] as String? ?? '').toLowerCase();
+      return {
+        'txId':           e['id'],
+        'txType':         type.toUpperCase(),
+        'referenceValue': type,
+        'totalMinor':     (((e['amount_shillings'] as num?) ?? 0) * 100).toInt(),
+        'currency':       'UGX',
+        'status':         (e['status'] as String?)?.toUpperCase() ?? 'POSTED',
+        'createdAt':      e['created_at']?.toString() ?? '',
+      };
+    }).toList();
+
+    return Response.ok(
+      jsonEncode({'data': {'transactions': transactions, 'total': total}}),
+      headers: {'content-type': 'application/json'},
+    );
+  });
+
+  router.get('/v1/patient/beneficiaries', (Request req) async {
+    final authHeader = req.headers['authorization'];
+    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
+      return Response(401,
+          body: jsonEncode({'error': 'Authentication required'}),
+          headers: {'content-type': 'application/json'});
+    }
+    String patientId;
+    try {
+      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
+      final payload = jwt.payload as Map<String, dynamic>;
+      if (payload['sub_type'] != 'patient') {
+        return Response(403,
+            body: jsonEncode({'error': 'Patient token required'}),
+            headers: {'content-type': 'application/json'});
+      }
+      patientId = payload['sub'] as String;
+    } on JWTExpiredException {
+      return Response(401,
+          body: jsonEncode({'error': 'Access token has expired'}),
+          headers: {'content-type': 'application/json'});
+    } on JWTException {
+      return Response(401,
+          body: jsonEncode({'error': 'Invalid token'}),
+          headers: {'content-type': 'application/json'});
+    }
+
+    final wallet = await walletRepo.findByPatientId(patientId);
+    if (wallet == null) {
+      return Response.ok(
+        jsonEncode({'data': []}),
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    final walletId = wallet['id'] as String;
+
+    final dependents = await walletRepo.findDependentsByWalletId(walletId);
+    final beneficiaries = dependents.map((d) => {
+      'id':           d['id'] ?? '',
+      'name':         d['full_name'] ?? '',
+      'relationship': d['relationship'] ?? '',
+      'nationalId':   d['national_id'] ?? '',
+      'phone':        d['phone_number'] ?? '',
+      'email':        '',
+      'status':       (d['is_active'] == true || d['is_active'] == 1)
+                          ? 'active'
+                          : 'inactive',
+      'addedOn':      d['created_at']?.toString() ?? '',
+    }).toList();
+
+    return Response.ok(
+      jsonEncode({'data': beneficiaries}),
+      headers: {'content-type': 'application/json'},
+    );
+  });
+
   // ── Admin — Patient Credential Management ─────────────────────────────────────
   router.post(
     '/v1/admin/patient-credentials/<patientId>/generate',
