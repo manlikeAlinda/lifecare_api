@@ -1,8 +1,6 @@
 import 'dart:convert';
-import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
-import 'package:lifecare_api/core/config/app_config.dart';
 import 'package:lifecare_api/core/database/database.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/logging/logger.dart';
@@ -80,6 +78,7 @@ Handler buildApp() {
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
   final adminOnly = Pipeline().addMiddleware(auth).addMiddleware(requireAdmin());
+  final patientAuth2 = patientAuthMiddleware();
 
   // ── Router ───────────────────────────────────────────────────────────────────
   final router = Router();
@@ -416,252 +415,135 @@ Handler buildApp() {
   router.post('/v1/patient/auth/change-password', patientAuthHandler.changePassword);
 
   // ── Patient self-service endpoints ────────────────────────────────────────────
-  router.get('/v1/patient/wallet', (Request req) async {
-    final authHeader = req.headers['authorization'];
-    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
-      return Response(401,
-          body: jsonEncode({'error': 'Authentication required'}),
-          headers: {'content-type': 'application/json'});
-    }
-    String patientId;
-    try {
-      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
-      final payload = jwt.payload as Map<String, dynamic>;
-      if (payload['sub_type'] != 'patient') {
-        return Response(403,
-            body: jsonEncode({'error': 'Patient token required'}),
-            headers: {'content-type': 'application/json'});
-      }
-      patientId = payload['sub'] as String;
-    } on JWTExpiredException {
-      return Response(401,
-          body: jsonEncode({'error': 'Access token has expired'}),
-          headers: {'content-type': 'application/json'});
-    } on JWTException {
-      return Response(401,
-          body: jsonEncode({'error': 'Invalid token'}),
-          headers: {'content-type': 'application/json'});
-    }
-    final wallet = await walletService.getWalletByPatient(patientId);
-    return okResponse(wallet);
-  });
+  router.get(
+    '/v1/patient/wallet',
+    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
+      final patient = requirePatientUser(req);
+      final wallet = await walletService.getWalletByPatient(patient.id);
+      return okResponse(wallet);
+    }),
+  );
 
-  router.get('/v1/patient/me', (Request req) async {
-    final authHeader = req.headers['authorization'];
-    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
-      return Response(401,
-          body: jsonEncode({'error': 'Authentication required'}),
-          headers: {'content-type': 'application/json'});
-    }
-    String patientId;
-    try {
-      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
-      final payload = jwt.payload as Map<String, dynamic>;
-      if (payload['sub_type'] != 'patient') {
-        return Response(403,
-            body: jsonEncode({'error': 'Patient token required'}),
-            headers: {'content-type': 'application/json'});
-      }
-      patientId = payload['sub'] as String;
-    } on JWTExpiredException {
-      return Response(401,
-          body: jsonEncode({'error': 'Access token has expired'}),
-          headers: {'content-type': 'application/json'});
-    } on JWTException {
-      return Response(401,
-          body: jsonEncode({'error': 'Invalid token'}),
-          headers: {'content-type': 'application/json'});
-    }
-    final patient = await patientRepo.findById(patientId);
-    if (patient == null) {
-      return Response(404,
-          body: jsonEncode({'error': 'Patient not found'}),
-          headers: {'content-type': 'application/json'});
-    }
-    return okResponse(patient);
-  });
+  router.get(
+    '/v1/patient/me',
+    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
+      final patientUser = requirePatientUser(req);
+      final patient = await patientRepo.findById(patientUser.id);
+      if (patient == null) throw ApiError.notFound('Patient not found');
+      return okResponse(patient);
+    }),
+  );
 
-  router.get('/v1/patient/visits', (Request req) async {
-    final authHeader = req.headers['authorization'];
-    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
-      return Response(401,
-          body: jsonEncode({'error': 'Authentication required'}),
-          headers: {'content-type': 'application/json'});
-    }
-    String patientId;
-    try {
-      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
-      final payload = jwt.payload as Map<String, dynamic>;
-      if (payload['sub_type'] != 'patient') {
-        return Response(403,
-            body: jsonEncode({'error': 'Patient token required'}),
-            headers: {'content-type': 'application/json'});
-      }
-      patientId = payload['sub'] as String;
-    } on JWTExpiredException {
-      return Response(401,
-          body: jsonEncode({'error': 'Access token has expired'}),
-          headers: {'content-type': 'application/json'});
-    } on JWTException {
-      return Response(401,
-          body: jsonEncode({'error': 'Invalid token'}),
-          headers: {'content-type': 'application/json'});
-    }
+  router.get(
+    '/v1/patient/visits',
+    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
+      final patientUser = requirePatientUser(req);
+      final qp = req.url.queryParameters;
+      final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
+      final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
 
-    final qp = req.url.queryParameters;
-    final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
-    final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
-    final dateFrom = qp['dateFrom'];
-    final dateTo   = qp['dateTo'];
+      final (encounters, total) = await encounterService.listEncounters(
+        patientId: patientUser.id,
+        limit: limit,
+        offset: offset,
+        dateFrom: qp['dateFrom'],
+        dateTo: qp['dateTo'],
+      );
 
-    final (encounters, total) = await encounterService.listEncounters(
-      patientId: patientId,
-      limit: limit,
-      offset: offset,
-      dateFrom: dateFrom,
-      dateTo: dateTo,
-    );
+      final visits = encounters.map((e) {
+        final svcs = (e['services'] as List?)
+            ?.map((s) => (s as Map<String, dynamic>)['name'] as String? ?? '')
+            .where((n) => n.isNotEmpty)
+            .join(', ');
+        return {
+          'visitId':        e['id'],
+          'referenceValue': e['reference_number'] ?? '',
+          'totalMinor':     (((e['total_cost'] as num?) ?? 0) * 100).toInt(),
+          'currency':       'UGX',
+          'services':       (svcs != null && svcs.isNotEmpty) ? svcs : null,
+          'encounterRef':   null,
+          'createdAt':      e['visited_at']?.toString() ?? e['created_at']?.toString() ?? '',
+          'status':         e['status'] ?? '',
+        };
+      }).toList();
 
-    final visits = encounters.map((e) {
-      final svcs = (e['services'] as List?)
-          ?.map((s) => (s as Map<String, dynamic>)['name'] as String? ?? '')
-          .where((n) => n.isNotEmpty)
-          .join(', ');
-      return {
-        'visitId':        e['id'],
-        'referenceValue': e['reference_number'] ?? '',
-        'totalMinor':     (((e['total_cost'] as num?) ?? 0) * 100).toInt(),
-        'currency':       'UGX',
-        'services':       (svcs != null && svcs.isNotEmpty) ? svcs : null,
-        'encounterRef':   null,
-        'createdAt':      e['visited_at']?.toString() ?? e['created_at']?.toString() ?? '',
-        'status':         e['status'] ?? '',
-      };
-    }).toList();
-
-    return Response.ok(
-      jsonEncode({'data': {'visits': visits, 'total': total}}),
-      headers: {'content-type': 'application/json'},
-    );
-  });
-
-  router.get('/v1/patient/transactions', (Request req) async {
-    final authHeader = req.headers['authorization'];
-    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
-      return Response(401,
-          body: jsonEncode({'error': 'Authentication required'}),
-          headers: {'content-type': 'application/json'});
-    }
-    String patientId;
-    try {
-      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
-      final payload = jwt.payload as Map<String, dynamic>;
-      if (payload['sub_type'] != 'patient') {
-        return Response(403,
-            body: jsonEncode({'error': 'Patient token required'}),
-            headers: {'content-type': 'application/json'});
-      }
-      patientId = payload['sub'] as String;
-    } on JWTExpiredException {
-      return Response(401,
-          body: jsonEncode({'error': 'Access token has expired'}),
-          headers: {'content-type': 'application/json'});
-    } on JWTException {
-      return Response(401,
-          body: jsonEncode({'error': 'Invalid token'}),
-          headers: {'content-type': 'application/json'});
-    }
-
-    final qp = req.url.queryParameters;
-    final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
-    final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
-
-    final wallet = await walletRepo.findByPatientId(patientId);
-    if (wallet == null) {
       return Response.ok(
-        jsonEncode({'data': {'transactions': [], 'total': 0}}),
+        jsonEncode({'data': {'visits': visits, 'total': total}}),
         headers: {'content-type': 'application/json'},
       );
-    }
-    final walletId = wallet['id'] as String;
+    }),
+  );
 
-    final (entries, total) =
-        await walletRepo.getLedger(walletId, limit: limit, offset: offset);
+  router.get(
+    '/v1/patient/transactions',
+    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
+      final patientUser = requirePatientUser(req);
+      final qp = req.url.queryParameters;
+      final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
+      final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
 
-    final transactions = entries.map((e) {
-      final type = (e['type'] as String? ?? '').toLowerCase();
-      return {
-        'txId':           e['id'],
-        'txType':         type.toUpperCase(),
-        'referenceValue': type,
-        'totalMinor':     (((e['amount_shillings'] as num?) ?? 0) * 100).toInt(),
-        'currency':       'UGX',
-        'status':         (e['status'] as String?)?.toUpperCase() ?? 'POSTED',
-        'createdAt':      e['created_at']?.toString() ?? '',
-      };
-    }).toList();
-
-    return Response.ok(
-      jsonEncode({'data': {'transactions': transactions, 'total': total}}),
-      headers: {'content-type': 'application/json'},
-    );
-  });
-
-  router.get('/v1/patient/beneficiaries', (Request req) async {
-    final authHeader = req.headers['authorization'];
-    if (authHeader == null || !authHeader.startsWith('Bearer ')) {
-      return Response(401,
-          body: jsonEncode({'error': 'Authentication required'}),
-          headers: {'content-type': 'application/json'});
-    }
-    String patientId;
-    try {
-      final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
-      final payload = jwt.payload as Map<String, dynamic>;
-      if (payload['sub_type'] != 'patient') {
-        return Response(403,
-            body: jsonEncode({'error': 'Patient token required'}),
-            headers: {'content-type': 'application/json'});
+      final wallet = await walletRepo.findByPatientId(patientUser.id);
+      if (wallet == null) {
+        return Response.ok(
+          jsonEncode({'data': {'transactions': [], 'total': 0}}),
+          headers: {'content-type': 'application/json'},
+        );
       }
-      patientId = payload['sub'] as String;
-    } on JWTExpiredException {
-      return Response(401,
-          body: jsonEncode({'error': 'Access token has expired'}),
-          headers: {'content-type': 'application/json'});
-    } on JWTException {
-      return Response(401,
-          body: jsonEncode({'error': 'Invalid token'}),
-          headers: {'content-type': 'application/json'});
-    }
 
-    final wallet = await walletRepo.findByPatientId(patientId);
-    if (wallet == null) {
+      final (entries, total) =
+          await walletRepo.getLedger(wallet['id'] as String, limit: limit, offset: offset);
+
+      final transactions = entries.map((e) {
+        final type = (e['type'] as String? ?? '').toLowerCase();
+        return {
+          'txId':           e['id'],
+          'txType':         type.toUpperCase(),
+          'referenceValue': type,
+          'totalMinor':     (((e['amount_shillings'] as num?) ?? 0) * 100).toInt(),
+          'currency':       'UGX',
+          'status':         (e['status'] as String?)?.toUpperCase() ?? 'POSTED',
+          'createdAt':      e['created_at']?.toString() ?? '',
+        };
+      }).toList();
+
       return Response.ok(
-        jsonEncode({'data': []}),
+        jsonEncode({'data': {'transactions': transactions, 'total': total}}),
         headers: {'content-type': 'application/json'},
       );
-    }
-    final walletId = wallet['id'] as String;
+    }),
+  );
 
-    final dependents = await walletRepo.findDependentsByWalletId(walletId);
-    final beneficiaries = dependents.map((d) => {
-      'id':           d['id'] ?? '',
-      'name':         d['full_name'] ?? '',
-      'relationship': d['relationship'] ?? '',
-      'nationalId':   d['national_id'] ?? '',
-      'phone':        d['phone_number'] ?? '',
-      'email':        '',
-      'status':       (d['is_active'] == true || d['is_active'] == 1)
-                          ? 'active'
-                          : 'inactive',
-      'addedOn':      d['created_at']?.toString() ?? '',
-    }).toList();
+  router.get(
+    '/v1/patient/beneficiaries',
+    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
+      final patientUser = requirePatientUser(req);
 
-    return Response.ok(
-      jsonEncode({'data': beneficiaries}),
-      headers: {'content-type': 'application/json'},
-    );
-  });
+      final wallet = await walletRepo.findByPatientId(patientUser.id);
+      if (wallet == null) {
+        return Response.ok(
+          jsonEncode({'data': []}),
+          headers: {'content-type': 'application/json'},
+        );
+      }
+
+      final dependents = await walletRepo.findDependentsByWalletId(wallet['id'] as String);
+      final beneficiaries = dependents.map((d) => {
+        'id':           d['id'] ?? '',
+        'name':         d['full_name'] ?? '',
+        'relationship': d['relationship'] ?? '',
+        'nationalId':   d['national_id'] ?? '',
+        'phone':        d['phone_number'] ?? '',
+        'email':        '',
+        'status':       (d['is_active'] == true || d['is_active'] == 1) ? 'active' : 'inactive',
+        'addedOn':      d['created_at']?.toString() ?? '',
+      }).toList();
+
+      return Response.ok(
+        jsonEncode({'data': beneficiaries}),
+        headers: {'content-type': 'application/json'},
+      );
+    }),
+  );
 
   // ── Admin — Patient Credential Management ─────────────────────────────────────
   router.post(
