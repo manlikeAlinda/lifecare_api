@@ -8,6 +8,19 @@ import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/middleware/request_id_middleware.dart';
 
 const _authUserKey = 'lifecare.authUser';
+const _patientUserKey = 'lifecare.patientUser';
+
+class PatientUser {
+  final String id;
+  final String phone;
+  final String patientCode;
+
+  const PatientUser({
+    required this.id,
+    required this.phone,
+    required this.patientCode,
+  });
+}
 
 class AuthUser {
   final String id;
@@ -90,6 +103,54 @@ AuthUser? getAuthUser(Request request) =>
 /// Retrieves the [AuthUser] from context or throws [ApiError.unauthenticated].
 AuthUser requireAuthUser(Request request) {
   final user = getAuthUser(request);
+  if (user == null) throw ApiError.unauthenticated();
+  return user;
+}
+
+/// Verifies a patient JWT Bearer token and attaches [PatientUser] to the request context.
+Middleware patientAuthMiddleware() {
+  return (Handler inner) {
+    return (Request request) async {
+      final requestId = getRequestId(request);
+      final authHeader = request.headers['authorization'];
+
+      if (authHeader == null || !authHeader.startsWith('Bearer ')) {
+        return errorResponse(ApiError.unauthenticated(), requestId);
+      }
+
+      try {
+        final jwt = JWT.verify(authHeader.substring(7), SecretKey(AppConfig.jwtSecret));
+        final payload = jwt.payload as Map<String, dynamic>;
+
+        if (payload['sub_type'] != 'patient') {
+          return errorResponse(
+            ApiError.forbidden('Patient token required'),
+            requestId,
+          );
+        }
+
+        final patientUser = PatientUser(
+          id: payload['sub'] as String,
+          phone: payload['phone'] as String? ?? '',
+          patientCode: payload['patient_code'] as String? ?? '',
+        );
+
+        final updated = request.change(context: {_patientUserKey: patientUser});
+        return inner(updated);
+      } on JWTExpiredException {
+        return errorResponse(ApiError.tokenExpired(), requestId);
+      } on JWTException {
+        return errorResponse(ApiError.unauthenticated('Invalid token'), requestId);
+      }
+    };
+  };
+}
+
+PatientUser? getPatientUser(Request request) =>
+    request.context[_patientUserKey] as PatientUser?;
+
+PatientUser requirePatientUser(Request request) {
+  final user = getPatientUser(request);
   if (user == null) throw ApiError.unauthenticated();
   return user;
 }

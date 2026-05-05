@@ -1,7 +1,6 @@
 # Dart / Pub
 .dart_tool/
 .packages
-pubspec.lock
 build/
 .pub-cache/
 
