@@ -36,4 +36,22 @@ class AppConfig {
 
   static String get smtpUser => _env['SMTP_USER'] ?? '';
   static String get smtpPassword => _env['SMTP_PASSWORD'] ?? '';
+
+  // ── Public backend URL (used as webhook callback base) ─────────────────────
+  static String get publicUrl =>
+      _env['PUBLIC_URL'] ?? 'https://lifecareapi-production.up.railway.app';
+
+  // ── MTN Mobile Money Collection ────────────────────────────────────────────
+  static String get mtnSubscriptionKey => _env['MTN_SUBSCRIPTION_KEY'] ?? '';
+  static String get mtnApiUser => _env['MTN_API_USER'] ?? '';
+  static String get mtnApiKey => _env['MTN_API_KEY'] ?? '';
+  static String get mtnTargetEnv => _env['MTN_TARGET_ENV'] ?? 'sandbox';
+  static String get mtnBaseUrl =>
+      _env['MTN_BASE_URL'] ?? 'https://ericssonbasicapi2.azure-api.net';
+
+  // ── Flutterwave (card payments) ────────────────────────────────────────────
+  // Get keys at: https://dashboard.flutterwave.com → Settings → API
+  static String get flutterwaveSecretKey => _env['FLUTTERWAVE_SECRET_KEY'] ?? '';
+  // Set a random string in your Flutterwave dashboard → Webhooks → Secret hash
+  static String get flutterwaveSecretHash => _env['FLUTTERWAVE_SECRET_HASH'] ?? '';
 }

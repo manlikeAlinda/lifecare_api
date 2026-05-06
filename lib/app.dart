@@ -37,6 +37,11 @@ import 'package:lifecare_api/modules/patient_credentials/patient_credentials_han
 import 'package:lifecare_api/modules/patient_credentials/patient_credentials_repository.dart';
 import 'package:lifecare_api/modules/patient_credentials/patient_credentials_service.dart';
 import 'package:lifecare_api/core/services/email_service.dart';
+import 'package:lifecare_api/core/services/mtn_momo_service.dart';
+import 'package:lifecare_api/core/services/flutterwave_service.dart';
+import 'package:lifecare_api/modules/deposits/deposit_handler.dart';
+import 'package:lifecare_api/modules/deposits/deposit_repository.dart';
+import 'package:lifecare_api/modules/deposits/deposit_service.dart';
 
 Handler buildApp() {
   final pool = Database.pool;
@@ -51,6 +56,7 @@ Handler buildApp() {
   final analyticsRepo = AnalyticsRepository(pool);
   final patientAuthRepo = PatientAuthRepository(pool);
   final patientCredRepo = PatientCredentialsRepository(pool);
+  final depositRepo = DepositRepository(pool);
 
   // ── Services ────────────────────────────────────────────────────────────────
   final authService = AuthService(authRepo);
@@ -63,6 +69,9 @@ Handler buildApp() {
   final emailService = EmailService();
   final patientAuthService = PatientAuthService(patientAuthRepo, authService);
   final patientCredService = PatientCredentialsService(patientCredRepo, emailService);
+  final mtnService = MtnMomoService();
+  final flwService = FlutterwaveService();
+  final depositService = DepositService(depositRepo, walletRepo, mtnService, flwService);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   final authHandler = AuthHandler(authService);
@@ -74,6 +83,7 @@ Handler buildApp() {
   final analyticsHandler = AnalyticsHandler(analyticsService);
   final patientAuthHandler = PatientAuthHandler(patientAuthService);
   final patientCredHandler = PatientCredentialsHandler(patientCredService);
+  final depositHandler = DepositHandler(depositService, flwService);
 
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
@@ -413,6 +423,23 @@ Handler buildApp() {
   router.post('/v1/patient/auth/refresh', patientAuthHandler.refresh);
   router.post('/v1/patient/auth/logout', patientAuthHandler.logout);
   router.post('/v1/patient/auth/change-password', patientAuthHandler.changePassword);
+
+  // ── Patient Deposits (MTN MoMo + Card) ───────────────────────────────────────
+  // /deposit must be before /deposit/<id> to avoid the wildcard catching it.
+  router.post(
+    '/v1/patient/deposit',
+    Pipeline().addMiddleware(patientAuth2).addHandler(depositHandler.initiate),
+  );
+  router.get(
+    '/v1/patient/deposit/<id>',
+    Pipeline().addMiddleware(patientAuth2).addHandler(
+      (Request req) => depositHandler.getStatus(req, req.params['id']!),
+    ),
+  );
+
+  // ── Payment Provider Webhooks (no auth — verified by payload/header) ──────────
+  router.post('/v1/webhooks/mtn', depositHandler.mtnWebhook);
+  router.post('/v1/webhooks/flutterwave', depositHandler.flutterwaveWebhook);
 
   // ── Patient self-service endpoints ────────────────────────────────────────────
   router.get(
