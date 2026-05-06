@@ -8,6 +8,10 @@ class WalletRepository {
 
   WalletRepository(this._pool);
 
+  /// Exposed so external services (e.g. DepositService) can pass the pool
+  /// directly to [appendLedgerEntry] without needing a transaction wrapper.
+  MySQLConnectionPool get pool => _pool;
+
   // ── DB column reality ─────────────────────────────────────────────────────
   // wallets:      wallet_id (PK), primary_patient_id, balance_minor,
   //               balance_shillings, status, created_at, last_activity_at
