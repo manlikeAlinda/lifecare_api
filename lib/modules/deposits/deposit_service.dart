@@ -52,9 +52,8 @@ class DepositService {
         phone: phone,
       );
     } catch (e) {
-      final reason = e.toString();
-      await _depositRepo.markFailed(depositId, reason);
-      throw ApiError.internal('MTN error: $reason');
+      await _depositRepo.markFailed(depositId, e.toString());
+      throw ApiError.internal('Could not reach MTN MoMo — please try again');
     }
 
     final isSandbox = AppConfig.mtnTargetEnv == 'sandbox';

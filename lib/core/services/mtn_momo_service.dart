@@ -69,9 +69,12 @@ class MtnMomoService {
     // MTN expects MSISDN without the leading +
     final msisdn = phone.startsWith('+') ? phone.substring(1) : phone;
 
+    // MTN sandbox only accepts EUR; production uses UGX.
+    final currency = AppConfig.mtnTargetEnv == 'sandbox' ? 'EUR' : 'UGX';
+
     final body = jsonEncode({
       'amount': amountShillings.toString(),
-      'currency': 'UGX',
+      'currency': currency,
       'externalId': referenceId,
       'payer': {'partyIdType': 'MSISDN', 'partyId': msisdn},
       'payerMessage': 'Lifecare wallet top-up',
