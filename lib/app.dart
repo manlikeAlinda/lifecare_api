@@ -37,8 +37,7 @@ import 'package:lifecare_api/modules/patient_credentials/patient_credentials_han
 import 'package:lifecare_api/modules/patient_credentials/patient_credentials_repository.dart';
 import 'package:lifecare_api/modules/patient_credentials/patient_credentials_service.dart';
 import 'package:lifecare_api/core/services/email_service.dart';
-import 'package:lifecare_api/core/services/mtn_momo_service.dart';
-import 'package:lifecare_api/core/services/flutterwave_service.dart';
+import 'package:lifecare_api/core/services/pesapal_service.dart';
 import 'package:lifecare_api/modules/deposits/deposit_handler.dart';
 import 'package:lifecare_api/modules/deposits/deposit_repository.dart';
 import 'package:lifecare_api/modules/deposits/deposit_service.dart';
@@ -69,9 +68,8 @@ Handler buildApp() {
   final emailService = EmailService();
   final patientAuthService = PatientAuthService(patientAuthRepo, authService);
   final patientCredService = PatientCredentialsService(patientCredRepo, emailService);
-  final mtnService = MtnMomoService();
-  final flwService = FlutterwaveService();
-  final depositService = DepositService(depositRepo, walletRepo, mtnService, flwService);
+  final pesapalService = PesapalService();
+  final depositService = DepositService(depositRepo, walletRepo, pesapalService);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   final authHandler = AuthHandler(authService);
@@ -83,7 +81,7 @@ Handler buildApp() {
   final analyticsHandler = AnalyticsHandler(analyticsService);
   final patientAuthHandler = PatientAuthHandler(patientAuthService);
   final patientCredHandler = PatientCredentialsHandler(patientCredService);
-  final depositHandler = DepositHandler(depositService, flwService);
+  final depositHandler = DepositHandler(depositService);
 
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
@@ -438,8 +436,7 @@ Handler buildApp() {
   );
 
   // ── Payment Provider Webhooks (no auth — verified by payload/header) ──────────
-  router.post('/v1/webhooks/mtn', depositHandler.mtnWebhook);
-  router.post('/v1/webhooks/flutterwave', depositHandler.flutterwaveWebhook);
+  router.post('/v1/webhooks/pesapal', depositHandler.pesapalIpn);
 
   // ── Patient self-service endpoints ────────────────────────────────────────────
   router.get(
