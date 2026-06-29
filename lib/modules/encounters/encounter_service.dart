@@ -59,13 +59,9 @@ class EncounterService {
       total += _lineTotal(med, priceKey: 'unit_price', altPriceKey: 'rate');
     }
 
-    final balance = (wallet['balance'] as num?)?.toDouble() ?? 0;
-    if (total > balance) {
-      throw ApiError.businessRule(
-        'Insufficient wallet balance. Required: $total, Available: $balance',
-      );
-    }
-
+    // Deduct in full even if it exceeds the available balance — the wallet
+    // is allowed to go negative, surfacing the patient as in-debt on the
+    // admin dashboard until topped up enough to clear it.
     return _repo.create(
       encounterId: generateUuid(),
       patientId: patientId,
