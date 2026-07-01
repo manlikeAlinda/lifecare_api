@@ -29,19 +29,22 @@ class UserRepository {
     int limit = 20,
     int offset = 0,
     String? role,
+    bool? active, // null = all, true = active only, false = inactive only
   }) async {
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
-    // Only filter by role when the value is a known system role.
-    // Unknown values (e.g. 'doctor') fall through to return all active users.
     const knownRoles = {'admin', 'staff'};
     final effectiveRole = (role != null && knownRoles.contains(role)) ? role : null;
-    String where;
+
+    final conditions = <String>[];
     if (effectiveRole != null) {
-      where = "WHERE r.role_key = :role AND u.is_active = 1";
+      conditions.add('r.role_key = :role');
       params['role'] = effectiveRole;
-    } else {
-      where = "WHERE u.is_active = 1";
     }
+    if (active != null) {
+      conditions.add('u.is_active = :active');
+      params['active'] = active ? 1 : 0;
+    }
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
 
     final countResult = await _pool.execute(
       'SELECT COUNT(*) as total FROM users u '
