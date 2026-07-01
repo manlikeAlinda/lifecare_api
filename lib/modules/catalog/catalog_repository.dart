@@ -351,25 +351,25 @@ class CatalogRepository {
     int limit = 20,
     int offset = 0,
     String? search,
-    bool? active, // null = all, true = active only, false = inactive only
+    bool? active, // null = active-only (default); true = active-only; false = all drugs
   }) async {
     // drugs is a standalone legacy table — not linked to catalog_items.
     final conditions = <String>[];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
 
-    if (active != null) {
-      conditions.add('is_active = :active');
-      params['active'] = active ? 1 : 0;
-    } else {
-      conditions.add('is_active = 1'); // default: active only
+    // active=false means "no filter" (return all). Default and active=true both
+    // return active-only. There is no "inactive-only" mode.
+    if (active == null || active) {
+      conditions.add('is_active = 1');
     }
+    // active == false → no is_active condition (all drugs returned)
 
     if (search != null && search.isNotEmpty) {
       conditions.add('(drug_name LIKE :search OR drug_type LIKE :search)');
       params['search'] = '%$search%';
     }
 
-    final where = 'WHERE ${conditions.join(' AND ')}';
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
 
     final countResult = await _pool.execute(
       'SELECT COUNT(*) as total FROM drugs $where',
@@ -391,14 +391,12 @@ class CatalogRepository {
     final conditions = <String>[];
     final params = <String, dynamic>{};
 
-    if (active != null) {
-      conditions.add('is_active = :active');
-      params['active'] = active ? 1 : 0;
-    } else {
+    if (active == null || active) {
       conditions.add('is_active = 1');
     }
+    // active == false → count all drugs
 
-    final where = 'WHERE ${conditions.join(' AND ')}';
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
     final result = await _pool.execute(
       'SELECT COUNT(*) as total FROM drugs $where',
       params,
