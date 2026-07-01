@@ -185,20 +185,24 @@ class UserRepository {
   }) async {
     final countResult = await _pool.execute(
       'SELECT COUNT(*) as total FROM audit_log '
-      "WHERE user_id = UNHEX(REPLACE(:userId, '-', ''))",
+      "WHERE user_id = UNHEX(REPLACE(:userId, '-', '')) "
+      "OR target_id = UNHEX(REPLACE(:userId, '-', ''))",
       {'userId': userId},
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
       'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(audit_id),1,8),'-',SUBSTR(HEX(audit_id),9,4),'-',"
-      "SUBSTR(HEX(audit_id),13,4),'-',SUBSTR(HEX(audit_id),17,4),'-',"
-      "SUBSTR(HEX(audit_id),21))) AS id, "
-      'action, target_type, timestamp, details '
-      'FROM audit_log '
-      "WHERE user_id = UNHEX(REPLACE(:userId, '-', '')) "
-      'ORDER BY timestamp DESC LIMIT :limit OFFSET :offset',
+      "LOWER(CONCAT(SUBSTR(HEX(al.audit_id),1,8),'-',SUBSTR(HEX(al.audit_id),9,4),'-',"
+      "SUBSTR(HEX(al.audit_id),13,4),'-',SUBSTR(HEX(al.audit_id),17,4),'-',"
+      "SUBSTR(HEX(al.audit_id),21))) AS id, "
+      'al.action, al.target_type, al.timestamp, al.details, '
+      "COALESCE(u.display_name, u.username, 'System') AS actor "
+      'FROM audit_log al '
+      'LEFT JOIN users u ON u.user_id = al.user_id '
+      "WHERE al.user_id = UNHEX(REPLACE(:userId, '-', '')) "
+      'OR al.target_id = UNHEX(REPLACE(:userId, \'-\', \'\')) '
+      'ORDER BY al.timestamp DESC LIMIT :limit OFFSET :offset',
       {'userId': userId, 'limit': limit, 'offset': offset},
     );
 
