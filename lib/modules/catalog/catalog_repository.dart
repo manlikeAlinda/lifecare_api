@@ -1,5 +1,6 @@
 import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
+import 'package:lifecare_api/core/utils/uuid.dart';
 
 class CatalogRepository {
   final MySQLConnectionPool _pool;
@@ -480,6 +481,103 @@ class CatalogRepository {
     );
 
     return (result.rows.map(_rowToMap).toList(), total);
+  }
+
+  // ── Drug CRUD (legacy drugs table) ───────────────────────────────────────
+
+  Future<Map<String, dynamic>?> findDrugById(int id) async {
+    final result = await _pool.execute(
+      'SELECT drug_id AS id, drug_name AS name, drug_type, '
+      'rate AS price, currency, is_active, created_at, updated_at '
+      'FROM drugs WHERE drug_id = :id LIMIT 1',
+      {'id': id},
+    );
+    if (result.rows.isEmpty) return null;
+    return _rowToMap(result.rows.first);
+  }
+
+  Future<Map<String, dynamic>> createDrug({
+    required String name,
+    required String drugType,
+    required double rate,
+    bool isActive = true,
+    String currency = 'UGX',
+  }) async {
+    final result = await _pool.execute(
+      'INSERT INTO drugs (drug_name, drug_type, rate, currency, is_active) '
+      'VALUES (:name, :drugType, :rate, :currency, :isActive)',
+      {
+        'name': name,
+        'drugType': drugType,
+        'rate': rate,
+        'currency': currency,
+        'isActive': isActive ? 1 : 0,
+      },
+    );
+    return (await findDrugById(result.lastInsertID.toInt()))!;
+  }
+
+  Future<Map<String, dynamic>?> updateDrug(
+    int id, {
+    required String name,
+    required String drugType,
+    required double rate,
+    required bool isActive,
+  }) async {
+    await _pool.execute(
+      'UPDATE drugs SET drug_name = :name, drug_type = :drugType, '
+      'rate = :rate, is_active = :isActive '
+      'WHERE drug_id = :id',
+      {
+        'name': name,
+        'drugType': drugType,
+        'rate': rate,
+        'isActive': isActive ? 1 : 0,
+        'id': id,
+      },
+    );
+    return findDrugById(id);
+  }
+
+  Future<bool> drugHasEncounterReferences(int id) async {
+    final result = await _pool.execute(
+      'SELECT COUNT(*) AS cnt FROM encounter_medications WHERE drug_id = :id',
+      {'id': id},
+    );
+    return int.parse(result.rows.first.assoc()['cnt'] ?? '0') > 0;
+  }
+
+  Future<bool> deleteDrug(int id) async {
+    final result = await _pool.execute(
+      'DELETE FROM drugs WHERE drug_id = :id',
+      {'id': id},
+    );
+    return result.affectedRows.toInt() > 0;
+  }
+
+  Future<void> writeDrugAudit({
+    required String actorId,
+    required String action,
+    required int drugId,
+  }) async {
+    try {
+      await _pool.execute(
+        'INSERT INTO audit_log '
+        '(audit_id, user_id, action, target_type, target_id, details) '
+        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
+        "UNHEX(REPLACE(:actorId, '-', '')), "
+        ':action, :targetType, NULL, :details)',
+        {
+          'auditId': generateUuid(),
+          'actorId': actorId,
+          'action': action,
+          'targetType': 'drug',
+          'details': '{"drug_id":$drugId}',
+        },
+      );
+    } catch (_) {
+      // Audit failure is non-fatal.
+    }
   }
 
   Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);

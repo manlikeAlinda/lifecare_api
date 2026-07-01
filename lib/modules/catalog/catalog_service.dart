@@ -1,6 +1,13 @@
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'catalog_repository.dart';
 
+bool _parseBool(dynamic v) {
+  if (v is bool) return v;
+  if (v is int) return v != 0;
+  if (v is String) return v == '1' || v.toLowerCase() == 'true';
+  return false;
+}
+
 class CatalogService {
   final CatalogRepository _repo;
 
@@ -81,5 +88,86 @@ class CatalogService {
   Future<void> deleteService(String domain, int id) async {
     final deleted = await _repo.deleteByDomain(domain, id);
     if (!deleted) throw ApiError.notFound('Service not found');
+  }
+
+  // ── Drug CRUD ──────────────────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> createDrug(
+    Map<String, dynamic> data,
+    String actorId,
+  ) async {
+    final name = (data['name'] as String? ?? '').trim();
+    final drugType = (data['drug_type'] as String? ?? 'Drugs').trim();
+    final rawRate = data['rate'];
+    final rate = rawRate is num
+        ? rawRate.toDouble()
+        : double.tryParse(rawRate?.toString() ?? '') ?? 0.0;
+    final isActive = _parseBool(data['is_active'] ?? true);
+
+    if (name.isEmpty) throw ApiError.validationError('name is required');
+    if (rate <= 0) throw ApiError.validationError('rate must be greater than zero');
+
+    final drug = await _repo.createDrug(
+      name: name,
+      drugType: drugType,
+      rate: rate,
+      isActive: isActive,
+    );
+    await _repo.writeDrugAudit(
+      actorId: actorId,
+      action: 'create_drug',
+      drugId: drug['id'] as int,
+    );
+    return drug;
+  }
+
+  Future<Map<String, dynamic>> updateDrug(
+    int id,
+    Map<String, dynamic> data,
+    String actorId,
+  ) async {
+    final existing = await _repo.findDrugById(id);
+    if (existing == null) throw ApiError.notFound('Drug not found');
+
+    final name = (data.containsKey('name')
+            ? data['name'] as String? ?? ''
+            : existing['name'] as String? ?? '')
+        .trim();
+    final drugType = (data.containsKey('drug_type')
+            ? data['drug_type'] as String? ?? 'Drugs'
+            : existing['drug_type'] as String? ?? 'Drugs')
+        .trim();
+    final rawRate = data.containsKey('rate')
+        ? data['rate']
+        : (existing['price'] ?? existing['rate']);
+    final rate = rawRate is num
+        ? rawRate.toDouble()
+        : double.tryParse(rawRate?.toString() ?? '') ?? 0.0;
+    final isActive = data.containsKey('is_active')
+        ? _parseBool(data['is_active'])
+        : _parseBool(existing['is_active']);
+
+    if (name.isEmpty) throw ApiError.validationError('name is required');
+    if (rate <= 0) throw ApiError.validationError('rate must be greater than zero');
+
+    final drug =
+        (await _repo.updateDrug(id, name: name, drugType: drugType, rate: rate, isActive: isActive))!;
+    await _repo.writeDrugAudit(actorId: actorId, action: 'update_drug', drugId: id);
+    return drug;
+  }
+
+  Future<void> deleteDrug(int id, String actorId) async {
+    final existing = await _repo.findDrugById(id);
+    if (existing == null) throw ApiError.notFound('Drug not found');
+
+    final hasRefs = await _repo.drugHasEncounterReferences(id);
+    if (hasRefs) {
+      throw ApiError.conflict(
+        'Drug is referenced in encounter records and cannot be deleted. Deactivate it instead.',
+      );
+    }
+
+    await _repo.deleteDrug(id);
+    await _repo.writeDrugAudit(actorId: actorId, action: 'delete_drug', drugId: id);
   }
 }
