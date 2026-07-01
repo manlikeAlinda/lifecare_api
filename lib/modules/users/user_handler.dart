@@ -11,14 +11,23 @@ class UserHandler {
   UserHandler(this._service);
 
   Future<Response> list(Request request) async {
-    final limit = parseLimit(request);
+    final limit = parseLimit(request, max: 500);
     final offset = parseOffset(request);
     final role = queryParam(request, 'role');
+    final activeParam = queryParam(request, 'active');
+    final bool? active = activeParam == null
+        ? true  // default: active users only (preserves existing behaviour)
+        : activeParam == '0' || activeParam == 'false'
+            ? false
+            : activeParam == 'all'
+                ? null
+                : true;
 
     final (users, total) = await _service.listUsers(
       limit: limit,
       offset: offset,
       role: role,
+      active: active,
     );
     return okListResponse(users, total: total, limit: limit, offset: offset);
   }

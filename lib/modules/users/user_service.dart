@@ -12,8 +12,9 @@ class UserService {
     int limit = 20,
     int offset = 0,
     String? role,
+    bool? active = true,
   }) =>
-      _repo.findAll(limit: limit, offset: offset, role: role);
+      _repo.findAll(limit: limit, offset: offset, role: role, active: active);
 
   Future<Map<String, dynamic>> getUser(String id) async {
     final user = await _repo.findById(id);
