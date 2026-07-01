@@ -1,4 +1,6 @@
 import 'package:shelf/shelf.dart';
+import 'package:lifecare_api/core/errors/api_error.dart';
+import 'package:lifecare_api/core/middleware/auth_middleware.dart';
 import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
 import 'catalog_service.dart';
@@ -88,6 +90,41 @@ class CatalogHandler {
 
   Future<Response> deleteService(Request request, String domain, String id) async {
     await _service.deleteService(domain, int.parse(id));
+    return noContentResponse();
+  }
+
+  // ── Drug CRUD ──────────────────────────────────────────────────────────────
+
+  Future<Response> createDrug(Request request) async {
+    final actor = requireAuthUser(request);
+    final body = await parseJsonBody(request);
+
+    Validator(body)
+      ..required('name')
+      ..throwIfInvalid();
+
+    final item = await _service.createDrug(body, actor.id);
+    return createdResponse(item);
+  }
+
+  Future<Response> updateDrug(Request request, String id) async {
+    final actor = requireAuthUser(request);
+    final drugId = int.tryParse(id);
+    if (drugId == null || drugId <= 0) {
+      throw ApiError.validationError('Invalid drug id');
+    }
+    final body = await parseJsonBody(request);
+    final item = await _service.updateDrug(drugId, body, actor.id);
+    return okResponse(item);
+  }
+
+  Future<Response> deleteDrug(Request request, String id) async {
+    final actor = requireAuthUser(request);
+    final drugId = int.tryParse(id);
+    if (drugId == null || drugId <= 0) {
+      throw ApiError.validationError('Invalid drug id');
+    }
+    await _service.deleteDrug(drugId, actor.id);
     return noContentResponse();
   }
 }

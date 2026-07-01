@@ -373,6 +373,23 @@ Handler buildApp() {
     '/v1/drugs/count',
     patientAuth.addHandler(catalogHandler.countDrugs),
   );
+  // Drug CRUD — registered before /<id> wildcard; write ops require admin
+  router.post(
+    '/v1/catalog/drugs',
+    adminOnly.addHandler(catalogHandler.createDrug),
+  );
+  router.put(
+    '/v1/catalog/drugs/<id>',
+    adminOnly.addHandler(
+      (Request req) => catalogHandler.updateDrug(req, req.params['id']!),
+    ),
+  );
+  router.delete(
+    '/v1/catalog/drugs/<id>',
+    adminOnly.addHandler(
+      (Request req) => catalogHandler.deleteDrug(req, req.params['id']!),
+    ),
+  );
   // Category-specific service routes — registered before /<id> wildcard
   // Slugs: dental, lab, procedures, imaging, laparoscopic, accommodation, consultation
   router.get(
