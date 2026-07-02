@@ -15,6 +15,7 @@ class EncounterRepository {
   //                       price, quantity
   // encounter_medications: id (PK), encounter_id, medication_id, drug_id,
   //                        dosage_instructions, quantity, rate, medication_name
+  // wallet_ledger:        ledger_id, wallet_id, type, amount_shillings
   // ─────────────────────────────────────────────────────────────────────────
 
   static const _uuidCols =
@@ -83,7 +84,6 @@ class EncounterRepository {
 
     final encounters = result.rows.map(_rowToMap).toList();
 
-    // Batch-fetch services and medications for the listed encounters.
     if (encounters.isNotEmpty) {
       final ids = encounters.map((e) => e['id'] as String).toList();
       final svcMap = await _findServicesForIds(ids);
@@ -193,11 +193,10 @@ class EncounterRepository {
 
   // ── Create ────────────────────────────────────────────────────────────────
 
-  /// Atomic encounter creation: inserts encounter, services, medications,
-  /// deducts wallet ledger, updates wallet balance, writes audit — one tx.
   Future<Map<String, dynamic>> create({
     required String encounterId,
     required String patientId,
+    String? dependentId,
     required String walletId,
     required double totalCost,
     required String createdBy,
@@ -211,16 +210,18 @@ class EncounterRepository {
     final ledgerEntryId = generateUuid();
 
     await _pool.transactional((conn) async {
-      // 1. Insert encounter.
+      // 1. Insert encounter — include dependent_id when provided.
       await conn.execute(
         'INSERT INTO encounters '
-        '(encounter_id, patient_id, reference_number, visited_at, service_type, '
-        'total_cost) '
+        '(encounter_id, patient_id, dependent_id, reference_number, visited_at, '
+        'service_type, total_cost) '
         "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), "
+        "${dependentId != null ? "UNHEX(REPLACE(:dependentId, '-', ''))" : 'NULL'}, "
         ':referenceNumber, :visitedAt, :serviceType, :totalCost)',
         {
           'id': encounterId,
           'patientId': patientId,
+          if (dependentId != null) 'dependentId': dependentId,
           'referenceNumber': referenceNumber ?? '',
           'visitedAt': visitedAt ?? _nowString(),
           'serviceType': serviceType ?? 'General',
@@ -266,13 +267,12 @@ class EncounterRepository {
             'dosage': med['dosage_instructions'],
             'qty': _toInt(med['quantity'] ?? 1),
             'rate': _toDouble(med['unit_price'] ?? med['rate']),
-            'medName':
-                med['medication_name'] as String? ?? med['name'] as String? ?? '',
+            'medName': med['medication_name'] as String? ?? med['name'] as String? ?? '',
           },
         );
       }
 
-      // 4. Append wallet ledger entry (deduction).
+      // 4. Wallet ledger deduction.
       await conn.execute(
         'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
         "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), "
@@ -314,33 +314,146 @@ class EncounterRepository {
     return (await findById(encounterId))!;
   }
 
+  // ── Update ────────────────────────────────────────────────────────────────
+
   Future<Map<String, dynamic>?> update(
     String id,
     Map<String, dynamic> fields,
-    String updatedBy,
-  ) async {
-    // Map API field names to DB columns.
+    String updatedBy, {
+    List<Map<String, dynamic>>? newServices,
+    List<Map<String, dynamic>>? newMedications,
+    double? newTotal,
+    double oldTotal = 0,
+  }) async {
+    // Scalar fields that map directly to DB columns.
     const colMap = {
       'service_type': 'service_type',
-      'encounter_type': 'service_type', // legacy alias accepted
+      'encounter_type': 'service_type', // legacy alias
       'status': 'status',
+      'reference_number': 'reference_number',
+      'visited_at': 'visited_at',
     };
 
-    final setClauses = fields.keys
-        .where(colMap.containsKey)
-        .map((k) => '${colMap[k]} = :$k')
-        .join(', ');
+    final setClauses = <String>[];
+    final params = <String, dynamic>{'id': id};
 
-    if (setClauses.isEmpty) return findById(id);
+    for (final key in fields.keys) {
+      if (colMap.containsKey(key)) {
+        setClauses.add('${colMap[key]} = :$key');
+        params[key] = fields[key];
+      }
+    }
 
-    final params = Map<String, dynamic>.from(fields)..['id'] = id;
+    // If child lines are being replaced, also update total_cost.
+    if (newTotal != null) {
+      setClauses.add('total_cost = :newTotal');
+      params['newTotal'] = newTotal;
+    }
 
     await _pool.transactional((conn) async {
-      await conn.execute(
-        'UPDATE encounters SET $setClauses '
-        "WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
-        params,
-      );
+      if (setClauses.isNotEmpty) {
+        await conn.execute(
+          'UPDATE encounters SET ${setClauses.join(', ')} '
+          "WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
+          params,
+        );
+      }
+
+      // Replace child lines when provided.
+      if (newServices != null) {
+        await conn.execute(
+          'DELETE FROM encounter_services '
+          "WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
+        );
+        for (final svc in newServices) {
+          final rawId = svc['catalog_item_id'] ?? svc['service_id'];
+          final serviceId = _toUuidString(rawId) ?? '00000000-0000-0000-0000-000000000000';
+          await conn.execute(
+            'INSERT INTO encounter_services '
+            '(id, encounter_id, service_id, service_name, price, quantity) '
+            "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:encId, '-', '')), "
+            "UNHEX(REPLACE(:serviceId, '-', '')), :serviceName, :price, :qty)",
+            {
+              'id': generateUuid(),
+              'encId': id,
+              'serviceId': serviceId,
+              'serviceName': svc['service_name'] as String? ?? svc['name'] as String? ?? '',
+              'price': _toDouble(svc['unit_price'] ?? svc['price']),
+              'qty': _toInt(svc['quantity'] ?? 1),
+            },
+          );
+        }
+      }
+
+      if (newMedications != null) {
+        await conn.execute(
+          'DELETE FROM encounter_medications '
+          "WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
+        );
+        for (final med in newMedications) {
+          final rawMedId = med['catalog_item_id'] ?? med['medication_id'];
+          final medId = _toUuidString(rawMedId);
+          await conn.execute(
+            'INSERT INTO encounter_medications '
+            '(id, encounter_id, medication_id, dosage_instructions, quantity, '
+            'rate, medication_name) '
+            "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:encId, '-', '')), "
+            "${medId != null ? "UNHEX(REPLACE(:medId, '-', ''))" : 'NULL'}, "
+            ':dosage, :qty, :rate, :medName)',
+            {
+              'id': generateUuid(),
+              'encId': id,
+              if (medId != null) 'medId': medId,
+              'dosage': med['dosage_instructions'],
+              'qty': _toInt(med['quantity'] ?? 1),
+              'rate': _toDouble(med['unit_price'] ?? med['rate']),
+              'medName': med['medication_name'] as String? ?? med['name'] as String? ?? '',
+            },
+          );
+        }
+      }
+
+      // Adjust wallet when total changed.
+      if (newTotal != null) {
+        final delta = newTotal - oldTotal;
+        if (delta != 0) {
+          final deltaInt = delta.round().abs();
+          final ledgerType = delta > 0 ? 'deduction' : 'reversal';
+          // Find the patient's wallet from the encounter row.
+          final walletResult = await conn.execute(
+            'SELECT w.wallet_id '
+            'FROM wallets w '
+            'JOIN encounters e ON e.patient_id = w.patient_id '
+            "WHERE e.encounter_id = UNHEX(REPLACE(:encId, '-', '')) LIMIT 1",
+            {'encId': id},
+          );
+          if (walletResult.rows.isNotEmpty) {
+            final walletRow = rowToMap(walletResult.rows.first);
+            final walletHex = walletRow['wallet_id'] as String;
+            await conn.execute(
+              'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+              "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(:walletHex), :type, :amount)",
+              {
+                'ledgerId': generateUuid(),
+                'walletHex': walletHex,
+                'type': ledgerType,
+                'amount': deltaInt,
+              },
+            );
+            final sign = delta > 0 ? '-' : '+';
+            await conn.execute(
+              'UPDATE wallets SET balance_shillings = balance_shillings $sign :amount, '
+              '    last_activity_at = NOW() '
+              'WHERE wallet_id = UNHEX(:walletHex)',
+              {'amount': deltaInt, 'walletHex': walletHex},
+            );
+          }
+        }
+      }
+
+      // Audit log.
       await conn.execute(
         'INSERT INTO audit_log '
         '(audit_id, user_id, action, target_type, target_id, details) '
@@ -361,15 +474,71 @@ class EncounterRepository {
     return findById(id);
   }
 
-  /// Hard-deletes the encounter row. Child rows in encounter_services,
-  /// encounter_medications, and encounter_drugs are removed by ON DELETE CASCADE.
-  /// Returns true if a row was deleted, false if the encounter was not found.
-  Future<bool> delete(String id) async {
-    final result = await _pool.execute(
-      "DELETE FROM encounters WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
+  // ── Delete ────────────────────────────────────────────────────────────────
+
+  /// Hard-deletes the encounter. Runs inside a transaction:
+  /// reverses the wallet ledger deduction, restores the balance,
+  /// deletes child rows (via CASCADE), then writes an audit entry.
+  Future<bool> delete(String id, String deletedBy) async {
+    // Fetch encounter + wallet before we delete anything.
+    final encResult = await _pool.execute(
+      'SELECT e.total_cost, w.wallet_id '
+      'FROM encounters e '
+      'LEFT JOIN wallets w ON w.patient_id = e.patient_id '
+      "WHERE e.encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
-    return result.affectedRows.toInt() > 0;
+    if (encResult.rows.isEmpty) return false;
+
+    final encRow = rowToMap(encResult.rows.first);
+    final totalCost = (_toDouble(encRow['total_cost'])).round();
+    final walletHex = encRow['wallet_id'] as String?;
+
+    await _pool.transactional((conn) async {
+      // 1. Reverse wallet ledger + balance if a wallet exists and cost > 0.
+      if (walletHex != null && totalCost > 0) {
+        await conn.execute(
+          'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+          "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(:walletHex), 'reversal', :amount)",
+          {
+            'ledgerId': generateUuid(),
+            'walletHex': walletHex,
+            'amount': totalCost,
+          },
+        );
+        await conn.execute(
+          'UPDATE wallets SET balance_shillings = balance_shillings + :amount, '
+          '    last_activity_at = NOW() '
+          'WHERE wallet_id = UNHEX(:walletHex)',
+          {'amount': totalCost, 'walletHex': walletHex},
+        );
+      }
+
+      // 2. Delete encounter (encounter_services + encounter_medications removed via CASCADE).
+      await conn.execute(
+        "DELETE FROM encounters WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
+        {'id': id},
+      );
+
+      // 3. Audit log.
+      await conn.execute(
+        'INSERT INTO audit_log '
+        '(audit_id, user_id, action, target_type, target_id, details) '
+        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
+        "UNHEX(REPLACE(:actorId, '-', '')), "
+        ':action, :targetType, '
+        "UNHEX(REPLACE(:targetId, '-', '')), '{}')",
+        {
+          'auditId': generateUuid(),
+          'actorId': deletedBy,
+          'action': 'DELETE_ENCOUNTER',
+          'targetType': 'encounter',
+          'targetId': id,
+        },
+      );
+    });
+
+    return true;
   }
 
   // ── Type helpers ──────────────────────────────────────────────────────────
@@ -389,20 +558,17 @@ class EncounterRepository {
     return 1;
   }
 
-  /// Returns v as a UUID string if it looks like one, null otherwise.
   static String? _toUuidString(dynamic v) {
     if (v == null) return null;
     final s = v.toString();
-    // Accept 32 hex chars with optional dashes (UUID format)
     final stripped = s.replaceAll('-', '');
     if (stripped.length == 32 && RegExp(r'^[0-9a-fA-F]+$').hasMatch(stripped)) {
-      // Re-format as UUID if not already
       if (s.contains('-')) return s;
       return '${stripped.substring(0, 8)}-${stripped.substring(8, 12)}-'
           '${stripped.substring(12, 16)}-${stripped.substring(16, 20)}-'
           '${stripped.substring(20)}';
     }
-    return null; // INT pk or invalid — fall back to zero UUID at call site
+    return null;
   }
 
   String _nowString() {

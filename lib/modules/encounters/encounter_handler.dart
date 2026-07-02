@@ -5,7 +5,6 @@ import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
 import 'encounter_service.dart';
 
-// Canonical status values — includes both API-originated and app-originated names.
 const _validStatuses = ['open', 'closed', 'cancelled', 'completed', 'pending'];
 
 class EncounterHandler {
@@ -18,8 +17,9 @@ class EncounterHandler {
     final offset = parseOffset(request);
     final patientId = queryParam(request, 'patient_id');
     final status = queryParam(request, 'status');
-    final dateFrom = queryParam(request, 'date_from');
-    final dateTo = queryParam(request, 'date_to');
+    // Flutter client sends 'from'/'to'; accept both names for backwards compat.
+    final dateFrom = queryParam(request, 'from') ?? queryParam(request, 'date_from');
+    final dateTo   = queryParam(request, 'to')   ?? queryParam(request, 'date_to');
     final search = queryParam(request, 'search');
 
     final (encounters, total) = await _service.listEncounters(
@@ -42,6 +42,15 @@ class EncounterHandler {
       ..required('patient_id')
       ..uuid('patient_id', label: 'patient_id')
       ..throwIfInvalid();
+
+    // Require at least one service or drug line so we never create an
+    // empty encounter with no clinical content and zero wallet deduction.
+    final services  = body['services']  as List? ?? [];
+    final drugLines = body['drug_lines'] as List? ?? body['medications'] as List? ?? [];
+    if (services.isEmpty && drugLines.isEmpty) {
+      throw ApiError.validationError(
+          'At least one service or drug line is required');
+    }
 
     final encounter = await _service.createEncounter(body, caller.id);
     return createdResponse(encounter);
@@ -82,7 +91,8 @@ class EncounterHandler {
   }
 
   Future<Response> delete(Request request, String id) async {
-    final deleted = await _service.deleteEncounter(id);
+    final caller = requireAuthUser(request);
+    final deleted = await _service.deleteEncounter(id, caller.id);
     if (!deleted) throw ApiError.notFound('Encounter not found');
     return noContentResponse();
   }
