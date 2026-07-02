@@ -1,4 +1,5 @@
 import 'package:shelf/shelf.dart';
+import 'package:lifecare_api/core/middleware/auth_middleware.dart';
 import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
 import 'analytics_service.dart';
@@ -40,6 +41,7 @@ class AnalyticsHandler {
   }
 
   Future<Response> generateReport(Request request) async {
+    final actor = requireAuthUser(request);
     final body = await parseJsonBody(request);
 
     Validator(body)
@@ -47,7 +49,7 @@ class AnalyticsHandler {
       ..oneOf('type', ['summary', 'encounters', 'financial'])
       ..throwIfInvalid();
 
-    final report = await _service.generateReport(body);
+    final report = await _service.generateReport(body, actor.id);
     return okResponse(report);
   }
 }
