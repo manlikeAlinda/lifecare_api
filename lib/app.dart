@@ -201,6 +201,14 @@ Handler buildApp() {
     '/v1/patients',
     patientAuth.addHandler(patientHandler.bulkUpdate),
   );
+  router.post(
+    '/v1/patients/bulk-status',
+    patientAuth.addHandler(patientHandler.bulkUpdateStatus),
+  );
+  router.post(
+    '/v1/patients/bulk-delete',
+    adminOnly.addHandler(patientHandler.bulkDelete),
+  );
   router.get(
     '/v1/patients/<id>',
     patientAuth.addHandler(
@@ -215,7 +223,7 @@ Handler buildApp() {
   );
   router.delete(
     '/v1/patients/<id>',
-    patientAuth.addHandler(
+    adminOnly.addHandler(
       (Request req) => patientHandler.delete(req, req.params['id']!),
     ),
   );
@@ -269,7 +277,7 @@ Handler buildApp() {
   );
   router.delete(
     '/v1/patients/<patientId>/dependents/<depId>',
-    patientAuth.addHandler(
+    adminOnly.addHandler(
       (Request req) =>
           patientHandler.deleteDependent(req, req.params['patientId']!, req.params['depId']!),
     ),
@@ -418,11 +426,31 @@ Handler buildApp() {
   );
 
   // ── Patient Auth (public) ─────────────────────────────────────────────────────
-  router.post('/v1/patient/auth/activate', patientAuthHandler.activate);
-  router.post('/v1/patient/auth/login', patientAuthHandler.login);
-  router.post('/v1/patient/auth/refresh', patientAuthHandler.refresh);
+  router.post(
+    '/v1/patient/auth/activate',
+    Pipeline()
+        .addMiddleware(rateLimitMiddleware(loginLimiter))
+        .addHandler(patientAuthHandler.activate),
+  );
+  router.post(
+    '/v1/patient/auth/login',
+    Pipeline()
+        .addMiddleware(rateLimitMiddleware(loginLimiter))
+        .addHandler(patientAuthHandler.login),
+  );
+  router.post(
+    '/v1/patient/auth/refresh',
+    Pipeline()
+        .addMiddleware(rateLimitMiddleware(refreshLimiter))
+        .addHandler(patientAuthHandler.refresh),
+  );
   router.post('/v1/patient/auth/logout', patientAuthHandler.logout);
-  router.post('/v1/patient/auth/change-password', patientAuthHandler.changePassword);
+  router.post(
+    '/v1/patient/auth/change-password',
+    Pipeline()
+        .addMiddleware(rateLimitMiddleware(loginLimiter))
+        .addHandler(patientAuthHandler.changePassword),
+  );
 
   // ── Patient Deposits (MTN MoMo + Card) ───────────────────────────────────────
   // /deposit must be before /deposit/<id> to avoid the wildcard catching it.

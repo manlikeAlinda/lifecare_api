@@ -36,7 +36,7 @@ class PatientRepository {
     int limit = 20,
     int offset = 0,
     String? search,
-    bool activeOnly = true,
+    bool? activeOnly, // null = all, true = active only, false = inactive only
   }) async {
     final conditions = <String>['primary_account_id IS NULL'];
 
@@ -45,7 +45,8 @@ class PatientRepository {
     // selectParams adds limit/offset on top.
     final selectParams = <String, dynamic>{'limit': limit, 'offset': offset};
 
-    if (activeOnly) conditions.add('is_active = 1');
+    if (activeOnly == true) conditions.add('is_active = 1');
+    if (activeOnly == false) conditions.add('is_active = 0');
     if (search != null && search.isNotEmpty) {
       conditions.add(
         '(full_name LIKE :search OR patient_code LIKE :search OR phone_e164 LIKE :search)',
@@ -225,34 +226,34 @@ class PatientRepository {
   ///   3. wallet_ledger + provider_transactions + wallets
   ///   4. sub-patients, then the primary patient row
   Future<void> hardDelete(String id) async {
-    final hex = id.replaceAll('-', '');
-
     try {
       await _pool.transactional((conn) async {
-        // 1. Collect sub-patient hex IDs.
+        // 1. Collect sub-patient UUIDs using a parameterized query.
         final subResult = await conn.execute(
-          "SELECT HEX(patient_id) AS pid FROM patients "
-          "WHERE primary_account_id = UNHEX('$hex')",
-          {},
+          "SELECT LOWER(CONCAT(SUBSTR(HEX(patient_id),1,8),'-',SUBSTR(HEX(patient_id),9,4),'-',"
+          "SUBSTR(HEX(patient_id),13,4),'-',SUBSTR(HEX(patient_id),17,4),'-',"
+          "SUBSTR(HEX(patient_id),21))) AS pid "
+          "FROM patients WHERE primary_account_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
         );
-        final subHexIds = subResult.rows
+        final subIds = subResult.rows
             .map((r) => r.assoc()['pid'] ?? '')
             .where((s) => s.isNotEmpty)
             .toList();
 
-        for (final pid in [hex, ...subHexIds]) {
+        for (final pid in [id, ...subIds]) {
           await conn.execute(
-            "DELETE FROM patient_sessions WHERE patient_id = UNHEX('$pid')",
-            {},
+            "DELETE FROM patient_sessions WHERE patient_id = UNHEX(REPLACE(:pid, '-', ''))",
+            {'pid': pid},
           );
           await conn.execute(
-            "DELETE FROM patient_credentials WHERE patient_id = UNHEX('$pid')",
-            {},
+            "DELETE FROM patient_credentials WHERE patient_id = UNHEX(REPLACE(:pid, '-', ''))",
+            {'pid': pid},
           );
           // encounter_services/medications/drugs cascade from encounter.
           await conn.execute(
-            "DELETE FROM encounters WHERE patient_id = UNHEX('$pid')",
-            {},
+            "DELETE FROM encounters WHERE patient_id = UNHEX(REPLACE(:pid, '-', ''))",
+            {'pid': pid},
           );
         }
 
@@ -260,32 +261,31 @@ class PatientRepository {
         await conn.execute(
           "DELETE wl FROM wallet_ledger wl "
           "INNER JOIN wallets w ON wl.wallet_id = w.wallet_id "
-          "WHERE w.primary_patient_id = UNHEX('$hex')",
-          {},
+          "WHERE w.primary_patient_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
         );
         await conn.execute(
           "DELETE pt FROM provider_transactions pt "
           "INNER JOIN wallets w ON pt.wallet_id = w.wallet_id "
-          "WHERE w.primary_patient_id = UNHEX('$hex')",
-          {},
+          "WHERE w.primary_patient_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
         );
         await conn.execute(
-          "DELETE FROM wallets WHERE primary_patient_id = UNHEX('$hex')",
-          {},
+          "DELETE FROM wallets WHERE primary_patient_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
         );
 
         // 3. Sub-patients first (FK), then primary.
         await conn.execute(
-          "DELETE FROM patients WHERE primary_account_id = UNHEX('$hex')",
-          {},
+          "DELETE FROM patients WHERE primary_account_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
         );
         await conn.execute(
-          "DELETE FROM patients WHERE patient_id = UNHEX('$hex')",
-          {},
+          "DELETE FROM patients WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
         );
       });
     } catch (e) {
-      // Surface duplicate-key violations as 409 instead of 500.
       if (e.toString().contains('1062')) {
         final field = e.toString().contains('patient_code')
             ? 'Account Code'

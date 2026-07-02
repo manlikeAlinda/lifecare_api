@@ -11,8 +11,21 @@ class PatientService {
     int limit = 20,
     int offset = 0,
     String? search,
-  }) =>
-      _repo.findAll(limit: limit, offset: offset, search: search);
+    String? status, // 'active' | 'inactive' | null = all
+  }) {
+    // null → show all; 'active' → active only; anything else → inactive only
+    final bool? activeOnly = status == null
+        ? null
+        : status.toLowerCase() == 'active'
+            ? true
+            : false;
+    return _repo.findAll(
+      limit: limit,
+      offset: offset,
+      search: search,
+      activeOnly: activeOnly,
+    );
+  }
 
   Future<Map<String, dynamic>> getPatient(String id) async {
     final patient = await _repo.findById(id);
@@ -69,6 +82,27 @@ class PatientService {
       if (id == null) continue;
       final fields = Map<String, dynamic>.from(u)..remove('id');
       await _repo.update(id, fields, updatedBy);
+    }
+  }
+
+  Future<void> bulkSetStatus(
+    List<String> ids,
+    bool active,
+    String updatedBy,
+  ) async {
+    for (final id in ids) {
+      await _repo.update(id, {'is_active': active ? 1 : 0}, updatedBy);
+    }
+  }
+
+  Future<void> bulkDeletePatients(
+    List<String> ids,
+    String deletedBy,
+  ) async {
+    for (final id in ids) {
+      final patient = await _repo.findById(id);
+      if (patient == null) continue; // skip already-deleted
+      await _repo.hardDelete(id);
     }
   }
 
