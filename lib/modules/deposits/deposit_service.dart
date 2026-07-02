@@ -112,10 +112,20 @@ class DepositService {
       return;
     }
 
-    // merchantRef == our depositId — look up directly.
-    final deposit = await _depositRepo.findById(merchantRef);
+    // Look up by provider_ref (trackingId) — NOT by merchantRef. This prevents
+    // a replay where an attacker reuses a completed trackingId from their own
+    // deposit to credit a different (larger) pending deposit.
+    final deposit = await _depositRepo.findByProviderRef(trackingId);
     if (deposit == null) {
-      log.warning('Pesapal IPN for unknown depositId=$merchantRef — ignored');
+      log.warning('Pesapal IPN for unknown trackingId=$trackingId — ignored');
+      return;
+    }
+    // Sanity: our stored depositId must match the merchantRef Pesapal sent.
+    if (merchantRef.isNotEmpty && deposit['id'] != merchantRef) {
+      log.warning(
+        'Pesapal IPN trackingId=$trackingId belongs to deposit=${deposit['id']} '
+        'but payload merchantRef=$merchantRef — possible replay, ignoring',
+      );
       return;
     }
 
@@ -137,23 +147,22 @@ class DepositService {
 
   Future<void> _creditWallet(Map<String, dynamic> deposit) async {
     final depositId = deposit['id'] as String;
-
-    final transitioned = await _depositRepo.markSuccessful(depositId);
-    if (!transitioned) {
-      log.info('Deposit $depositId already processed — skipping credit');
-      return;
-    }
-
     final walletId = deposit['wallet_id'] as String;
     final amountShillings = (deposit['amount_shillings'] as int).toDouble();
 
-    await _walletRepo.appendLedgerEntry(
-      conn: _walletRepo.pool,
-      entryId: generateUuid(),
+    // Atomic: markSuccessful + wallet ledger entry in one transaction so a
+    // crash between the two writes cannot leave a SUCCESSFUL deposit with an
+    // uncredited wallet (no recovery path would exist after that).
+    final credited = await _depositRepo.creditDepositTransaction(
+      depositId: depositId,
       walletId: walletId,
-      transactionType: 'deposit',
-      amount: amountShillings,
+      amountShillings: amountShillings,
     );
+
+    if (!credited) {
+      log.info('Deposit $depositId already processed — skipping credit');
+      return;
+    }
 
     log.info('Wallet credited: deposit=$depositId wallet=$walletId UGX=$amountShillings');
   }

@@ -170,13 +170,30 @@ class WalletRepository {
       },
     );
 
-    await conn.execute(
-      'UPDATE wallets '
-      'SET balance_shillings = balance_shillings + :delta, '
-      '    last_activity_at = NOW() '
-      "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
-      {'delta': delta, 'walletId': walletId},
-    );
+    if (isCredit) {
+      await conn.execute(
+        'UPDATE wallets '
+        'SET balance_shillings = balance_shillings + :delta, '
+        '    last_activity_at = NOW() '
+        "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
+        {'delta': delta, 'walletId': walletId},
+      );
+    } else {
+      // Atomic balance floor: only apply if the result would be non-negative.
+      // This prevents concurrent deductions from racing past the pre-check and
+      // driving the balance below zero.
+      final result = await conn.execute(
+        'UPDATE wallets '
+        'SET balance_shillings = balance_shillings + :delta, '
+        '    last_activity_at = NOW() '
+        "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
+        'AND balance_shillings + :delta >= 0',
+        {'delta': delta, 'walletId': walletId},
+      );
+      if (result.affectedRows.toInt() == 0) {
+        throw ApiError.businessRule('Insufficient wallet balance');
+      }
+    }
   }
 
   // ── Public transaction (deposit / deduction / etc.) ───────────────────────

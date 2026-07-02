@@ -102,4 +102,48 @@ class DepositRepository {
       {'meta': jsonMetadata, 'id': depositId},
     );
   }
+
+  /// Atomically transitions the deposit PENDING → SUCCESSFUL and credits the
+  /// wallet in a single transaction so a crash between the two writes cannot
+  /// leave a deposit SUCCESSFUL with an uncredited wallet.
+  ///
+  /// Returns true if this call performed the credit; false if already done
+  /// (idempotent — safe to call from both IPN handler and status polling).
+  Future<bool> creditDepositTransaction({
+    required String depositId,
+    required String walletId,
+    required double amountShillings,
+  }) async {
+    bool credited = false;
+    await _pool.transactional((conn) async {
+      final result = await conn.execute(
+        "UPDATE deposits SET status = 'SUCCESSFUL' "
+        "WHERE ${uuidWhere('deposit_id', 'id')} AND status = 'PENDING'",
+        {'id': depositId},
+      );
+      if (result.affectedRows.toInt() == 0) return; // already processed
+
+      final entryId = generateUuid();
+      final amountInt = amountShillings.round();
+
+      await conn.execute(
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+        "VALUES (UNHEX(REPLACE(:entryId, '-', '')), "
+        "UNHEX(REPLACE(:walletId, '-', '')), "
+        "'deposit', :amount)",
+        {'entryId': entryId, 'walletId': walletId, 'amount': amountInt},
+      );
+
+      await conn.execute(
+        'UPDATE wallets '
+        'SET balance_shillings = balance_shillings + :amount, '
+        '    last_activity_at = NOW() '
+        "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
+        {'amount': amountInt, 'walletId': walletId},
+      );
+
+      credited = true;
+    });
+    return credited;
+  }
 }
