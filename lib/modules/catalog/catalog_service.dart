@@ -68,9 +68,20 @@ class CatalogService {
   Future<Map<String, dynamic>> createService(
     String domain,
     Map<String, dynamic> data,
+    String actorId,
   ) async {
+    if (data.containsKey('rate')) {
+      final rate = (data['rate'] as num?)?.toDouble() ?? 0;
+      if (rate < 0) throw ApiError.validationError('rate must be non-negative');
+    }
     final item = await _repo.createByDomain(domain, data);
     if (item == null) throw ApiError.notFound('Unknown service domain: $domain');
+    await _repo.writeServiceAudit(
+      actorId: actorId,
+      action: 'create_service',
+      domain: domain,
+      serviceId: item['id'] as int,
+    );
     return item;
   }
 
@@ -78,16 +89,33 @@ class CatalogService {
     String domain,
     int id,
     Map<String, dynamic> data,
+    String actorId,
   ) async {
+    if (data.containsKey('rate')) {
+      final rate = (data['rate'] as num?)?.toDouble() ?? 0;
+      if (rate < 0) throw ApiError.validationError('rate must be non-negative');
+    }
     final existing = await _repo.findByDomainAndId(domain, id);
     if (existing == null) throw ApiError.notFound('Service not found');
     final item = await _repo.updateByDomain(domain, id, data);
+    await _repo.writeServiceAudit(
+      actorId: actorId,
+      action: 'update_service',
+      domain: domain,
+      serviceId: id,
+    );
     return item!;
   }
 
-  Future<void> deleteService(String domain, int id) async {
+  Future<void> deleteService(String domain, int id, String actorId) async {
     final deleted = await _repo.deleteByDomain(domain, id);
     if (!deleted) throw ApiError.notFound('Service not found');
+    await _repo.writeServiceAudit(
+      actorId: actorId,
+      action: 'delete_service',
+      domain: domain,
+      serviceId: id,
+    );
   }
 
   // ── Drug CRUD ──────────────────────────────────────────────────────────────

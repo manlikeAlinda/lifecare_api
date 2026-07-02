@@ -72,24 +72,35 @@ class CatalogHandler {
   }
 
   Future<Response> createService(Request request, String domain) async {
+    final actor = requireAuthUser(request);
     final body = await parseJsonBody(request);
 
     Validator(body)
       ..required('name')
       ..throwIfInvalid();
 
-    final item = await _service.createService(domain, body);
+    final item = await _service.createService(domain, body, actor.id);
     return createdResponse(item);
   }
 
   Future<Response> updateService(Request request, String domain, String id) async {
+    final serviceId = int.tryParse(id);
+    if (serviceId == null || serviceId <= 0) {
+      throw ApiError.validationError('Invalid service id');
+    }
+    final actor = requireAuthUser(request);
     final body = await parseJsonBody(request);
-    final item = await _service.updateService(domain, int.parse(id), body);
+    final item = await _service.updateService(domain, serviceId, body, actor.id);
     return okResponse(item);
   }
 
   Future<Response> deleteService(Request request, String domain, String id) async {
-    await _service.deleteService(domain, int.parse(id));
+    final serviceId = int.tryParse(id);
+    if (serviceId == null || serviceId <= 0) {
+      throw ApiError.validationError('Invalid service id');
+    }
+    final actor = requireAuthUser(request);
+    await _service.deleteService(domain, serviceId, actor.id);
     return noContentResponse();
   }
 
