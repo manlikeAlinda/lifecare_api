@@ -36,8 +36,9 @@ class AuthService {
     bool verified = false;
 
     if (algorithm == 'sha256') {
-      // SHA-256 legacy path: compare byte-for-byte in constant time to avoid
-      // timing side channels, then migrate to bcrypt on success.
+      // SHA-256 legacy path: compare byte-for-byte in constant time.
+      // WARNING: SHA-256 hashes are unsalted — rainbow-table risk until the
+      // user logs in and triggers the bcrypt migration below.
       final inputBytes = sha256.convert(utf8.encode(password)).bytes;
       final storedBytes = storedHash.codeUnits;
       if (inputBytes.length == storedBytes.length) {
@@ -48,7 +49,6 @@ class AuthService {
         verified = diff == 0;
       }
       if (verified) {
-        // Migrate to bcrypt on successful login
         final bcryptHash = BCrypt.hashpw(password, BCrypt.gensalt());
         await _repo.updatePasswordHash(userId, bcryptHash, 'bcrypt');
       }
@@ -56,13 +56,31 @@ class AuthService {
       verified = BCrypt.checkpw(password, storedHash);
     }
 
-    if (!verified) throw ApiError.unauthenticated('Invalid credentials');
+    if (!verified) {
+      await _repo.insertAuditLog(
+        userId: userId,
+        action: 'LOGIN_FAIL',
+        targetType: 'user',
+        targetId: userId,
+        details: '{"reason":"invalid_password"}',
+      );
+      throw ApiError.unauthenticated('Invalid credentials');
+    }
 
-    return _issueTokens(
+    final tokens = await _issueTokens(
       userId: userId,
       role: user['role'] as String,
       username: user['username'] as String,
     );
+
+    await _repo.insertAuditLog(
+      userId: userId,
+      action: 'LOGIN',
+      targetType: 'user',
+      targetId: userId,
+    );
+
+    return tokens;
   }
 
   Future<Map<String, dynamic>> refresh(String refreshToken) async {
@@ -77,25 +95,37 @@ class AuthService {
       throw ApiError.forbidden('Account is inactive');
     }
 
-    // Rotate: revoke old session, issue new tokens
-    await _repo.revokeSessionByToken(tokenHash);
-
+    // Rotate atomically: revoke old session and create new in one transaction
+    // so a partial failure cannot permanently lock the user out.
     return _issueTokens(
       userId: session['user_id'] as String,
       role: session['role'] as String,
       username: session['username'] as String,
+      oldTokenHash: tokenHash,
     );
   }
 
   Future<void> logout(String refreshToken) async {
     final tokenHash = _hashToken(refreshToken);
+    // Fetch session before revoking so we can record the user_id in audit_log.
+    final session = await _repo.findActiveSession(tokenHash);
     await _repo.revokeSessionByToken(tokenHash);
+    if (session != null) {
+      final userId = session['user_id'] as String;
+      await _repo.insertAuditLog(
+        userId: userId,
+        action: 'LOGOUT',
+        targetType: 'user',
+        targetId: userId,
+      );
+    }
   }
 
   Future<Map<String, dynamic>> _issueTokens({
     required String userId,
     required String role,
     required String username,
+    String? oldTokenHash,
   }) async {
     final accessToken = _generateAccessToken(
       userId: userId,
@@ -110,13 +140,24 @@ class AuthService {
       Duration(days: AppConfig.jwtRefreshExpiryDays),
     );
 
-    await _repo.createSession(
-      sessionId: sessionId,
-      userId: userId,
-      refreshTokenHash: refreshTokenHash,
-      role: role,
-      expiresAt: expiresAt,
-    );
+    if (oldTokenHash != null) {
+      await _repo.rotateSession(
+        oldTokenHash: oldTokenHash,
+        sessionId: sessionId,
+        userId: userId,
+        refreshTokenHash: refreshTokenHash,
+        role: role,
+        expiresAt: expiresAt,
+      );
+    } else {
+      await _repo.createSession(
+        sessionId: sessionId,
+        userId: userId,
+        refreshTokenHash: refreshTokenHash,
+        role: role,
+        expiresAt: expiresAt,
+      );
+    }
 
     return {
       'access_token': accessToken,
