@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/logging/logger.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 
 class AnalyticsRepository {
@@ -156,6 +157,8 @@ class AnalyticsRepository {
     };
   }
 
+  static const _encountersReportLimit = 5000;
+
   Future<Map<String, dynamic>> _generateEncountersReport(
     String from,
     String to,
@@ -170,15 +173,19 @@ class AnalyticsRepository {
       'FROM encounters e '
       'JOIN patients p ON e.patient_id = p.patient_id '
       'WHERE e.visited_at BETWEEN :from AND :to '
-      'ORDER BY e.visited_at DESC',
-      {'from': from, 'to': to},
+      'ORDER BY e.visited_at DESC '
+      'LIMIT :limit',
+      {'from': from, 'to': to, 'limit': _encountersReportLimit},
     );
 
+    final rows = result.rows.map((r) => Map<String, dynamic>.from(r.assoc())).toList();
     return {
       'report_type': 'encounters',
       'generated_at': DateTime.now().toIso8601String(),
       'period': {'from': from, 'to': to},
-      'encounters': result.rows.map((r) => Map<String, dynamic>.from(r.assoc())).toList(),
+      'encounters': rows,
+      if (rows.length >= _encountersReportLimit)
+        'truncated': true,
     };
   }
 
@@ -217,6 +224,29 @@ class AnalyticsRepository {
       'deposits_held': double.tryParse(row['deposits_held'] ?? '0') ?? 0.0,
       'wallet_count': int.tryParse(row['wallet_count'] ?? '0') ?? 0,
     };
+  }
+
+  Future<void> writeReportAudit({
+    required String actorId,
+    required String reportType,
+    required String auditId,
+  }) async {
+    try {
+      await _pool.execute(
+        'INSERT INTO audit_log (audit_id, user_id, action, target_type, target_id, details) '
+        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:actorId, '-', '')), "
+        ':action, :targetType, NULL, :details)',
+        {
+          'auditId': auditId,
+          'actorId': actorId,
+          'action': 'GENERATE_REPORT',
+          'targetType': 'report',
+          'details': '{"report_type":"$reportType"}',
+        },
+      );
+    } catch (e) {
+      log.warning('Analytics audit write failed: $e');
+    }
   }
 
   Future<int> _count(String sql, Map<String, dynamic> params) async {
