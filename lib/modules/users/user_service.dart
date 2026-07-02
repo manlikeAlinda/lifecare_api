@@ -73,6 +73,8 @@ class UserService {
     final user = await _repo.findById(id);
     if (user == null) throw ApiError.notFound('User not found');
     await _repo.softDelete(id);
+    // Invalidate all active refresh tokens so the deleted user cannot continue sessions.
+    await _repo.revokeAllSessions(id);
   }
 
   Future<void> changePassword(String id, String newPassword) async {
@@ -116,5 +118,16 @@ class UserService {
     if (user == null) throw ApiError.notFound('User not found');
     await _repo.updateRole(id, role);
     return (await _repo.findById(id))!;
+  }
+
+  /// Non-fatal audit write — failures are swallowed so they never abort the main response.
+  Future<void> writeUserAudit({
+    required String actorId,
+    required String action,
+    required String targetUserId,
+  }) async {
+    try {
+      await _repo.writeAudit(actorId: actorId, action: action, targetUserId: targetUserId);
+    } catch (_) {}
   }
 }

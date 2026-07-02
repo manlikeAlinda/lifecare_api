@@ -39,7 +39,10 @@ class RateLimiter {
   }
 }
 
-// Shared rate limiter instances (per spec)
+// Shared rate limiter instances (per spec).
+// NOTE: These are in-process only — state resets on restart and is not shared across
+// multiple instances. For multi-instance deployments, replace with a Redis-backed
+// implementation keyed on IP + action.
 final loginLimiter = RateLimiter(maxRequests: 10, window: Duration(minutes: 1));
 final refreshLimiter = RateLimiter(maxRequests: 20, window: Duration(minutes: 1));
 final generalLimiter = RateLimiter(maxRequests: 300, window: Duration(minutes: 1));
