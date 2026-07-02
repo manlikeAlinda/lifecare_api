@@ -39,18 +39,19 @@ class EncounterService {
     String createdBy,
   ) async {
     final patientId = data['patient_id'] as String;
+    final dependentId = data['dependent_id'] as String?;
 
-    // Get the patient's wallet
     final wallet = await _walletRepo.findByPatientId(patientId);
     if (wallet == null) {
       throw ApiError.businessRule('No wallet found for this patient');
     }
 
     final services = (data['services'] as List? ?? []).cast<Map<String, dynamic>>();
-    final medications = (data['medications'] as List? ?? []).cast<Map<String, dynamic>>();
+    // Accept both 'drug_lines' (Flutter client) and 'medications' (legacy) keys.
+    final medications = (data['drug_lines'] as List? ??
+                         data['medications'] as List? ?? [])
+        .cast<Map<String, dynamic>>();
 
-    // Calculate total — use pre-computed total_price if present, otherwise
-    // derive from unit_price (or price) × quantity.
     double total = 0;
     for (final svc in services) {
       total += _lineTotal(svc, priceKey: 'unit_price', altPriceKey: 'price');
@@ -59,12 +60,10 @@ class EncounterService {
       total += _lineTotal(med, priceKey: 'unit_price', altPriceKey: 'rate');
     }
 
-    // Deduct in full even if it exceeds the available balance — the wallet
-    // is allowed to go negative, surfacing the patient as in-debt on the
-    // admin dashboard until topped up enough to clear it.
     return _repo.create(
       encounterId: generateUuid(),
       patientId: patientId,
+      dependentId: dependentId,
       walletId: wallet['id'] as String,
       totalCost: total,
       createdBy: createdBy,
@@ -88,12 +87,44 @@ class EncounterService {
       throw ApiError.businessRule('Cannot update a cancelled encounter');
     }
 
-    final updated = await _repo.update(id, data, updatedBy);
+    // If services/drug_lines are included, recalculate total for wallet adjustment.
+    final hasLines =
+        data.containsKey('services') || data.containsKey('drug_lines');
+
+    double? newTotal;
+    List<Map<String, dynamic>>? newServices;
+    List<Map<String, dynamic>>? newMedications;
+
+    if (hasLines) {
+      newServices = (data['services'] as List? ?? []).cast<Map<String, dynamic>>();
+      newMedications = (data['drug_lines'] as List? ??
+                        data['medications'] as List? ?? [])
+          .cast<Map<String, dynamic>>();
+
+      double total = 0;
+      for (final svc in newServices) {
+        total += _lineTotal(svc, priceKey: 'unit_price', altPriceKey: 'price');
+      }
+      for (final med in newMedications) {
+        total += _lineTotal(med, priceKey: 'unit_price', altPriceKey: 'rate');
+      }
+      newTotal = total;
+    }
+
+    final updated = await _repo.update(
+      id,
+      data,
+      updatedBy,
+      newServices: newServices,
+      newMedications: newMedications,
+      newTotal: newTotal,
+      oldTotal: (encounter['total_cost'] as num?)?.toDouble() ?? 0,
+    );
     return updated!;
   }
 
-  Future<bool> deleteEncounter(String id) async {
-    return _repo.delete(id);
+  Future<bool> deleteEncounter(String id, String deletedBy) async {
+    return _repo.delete(id, deletedBy);
   }
 
   static double _lineTotal(
@@ -101,10 +132,8 @@ class EncounterService {
     required String priceKey,
     required String altPriceKey,
   }) {
-    // Prefer pre-computed total_price if provided.
     final preTotal = item['total_price'];
     if (preTotal != null) return _toDouble(preTotal);
-
     final price = _toDouble(item[priceKey] ?? item[altPriceKey]);
     final qty = _toDouble(item['quantity'] ?? 1);
     return price * qty;

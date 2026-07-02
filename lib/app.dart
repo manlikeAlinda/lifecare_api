@@ -337,7 +337,7 @@ Handler buildApp() {
   );
   router.delete(
     '/v1/encounters/<id>',
-    patientAuth.addHandler(
+    adminOnly.addHandler(
       (Request req) => encounterHandler.delete(req, req.params['id']!),
     ),
   );
