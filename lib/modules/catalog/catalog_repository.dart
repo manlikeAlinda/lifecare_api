@@ -578,5 +578,31 @@ class CatalogRepository {
     }
   }
 
+  Future<void> writeServiceAudit({
+    required String actorId,
+    required String action,
+    required String domain,
+    required int serviceId,
+  }) async {
+    try {
+      await _pool.execute(
+        'INSERT INTO audit_log '
+        '(audit_id, user_id, action, target_type, target_id, details) '
+        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
+        "UNHEX(REPLACE(:actorId, '-', '')), "
+        ':action, :targetType, NULL, :details)',
+        {
+          'auditId': generateUuid(),
+          'actorId': actorId,
+          'action': action,
+          'targetType': 'service',
+          'details': '{"domain":"$domain","service_id":$serviceId}',
+        },
+      );
+    } catch (_) {
+      // Audit failure is non-fatal.
+    }
+  }
+
   Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);
 }
