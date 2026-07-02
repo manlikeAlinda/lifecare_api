@@ -310,7 +310,7 @@ Handler buildApp() {
   );
   router.post(
     '/v1/wallets/<id>/transactions',
-    patientAuth.addHandler(
+    adminOnly.addHandler(
       (Request req) => walletHandler.createTransaction(req, req.params['id']!),
     ),
   );
