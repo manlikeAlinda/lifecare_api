@@ -24,6 +24,13 @@ class PatientAuthService {
     final credential = await _repo.findCredentialByPatientId(patientId);
     if (credential == null) throw ApiError.notFound('Credentials not found');
 
+    final status = credential['status'] as String;
+    final mustChangePw = credential['must_change_pw'] == true;
+    if (status != 'pending_activation' && !mustChangePw) {
+      throw ApiError.forbidden(
+          'Account is already active. Use the change-password endpoint.');
+    }
+
     _validatePassword(newPassword);
 
     final newHash = BCrypt.hashpw(newPassword, BCrypt.gensalt(logRounds: 12));
@@ -75,6 +82,7 @@ class PatientAuthService {
       // First-time login: verify the admin-issued PIN.
       final pinHash = credential['activation_pin'] as String?;
       if (pinHash == null || !BCrypt.checkpw(password, pinHash)) {
+        await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_LOGIN_FAIL');
         throw ApiError.unauthenticated('Invalid PIN');
       }
       mustChangePw = true; // force them to change PIN after first login
@@ -82,6 +90,7 @@ class PatientAuthService {
       // Active account: verify against the patient's own password/PIN.
       final storedHash = credential['password_hash'] as String;
       if (!BCrypt.checkpw(password, storedHash)) {
+        await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_LOGIN_FAIL');
         throw ApiError.unauthenticated('Invalid credentials');
       }
       mustChangePw = credential['must_change_pw'] == true;
