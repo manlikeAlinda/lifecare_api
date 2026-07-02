@@ -1,5 +1,6 @@
 import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
+import 'package:lifecare_api/core/utils/uuid.dart';
 
 class AuthRepository {
   final MySQLConnectionPool _pool;
@@ -154,6 +155,71 @@ class AuthRepository {
       'UPDATE sessions SET revoked_at = NOW() '
       'WHERE user_id = UNHEX(REPLACE(:userId, \'-\', \'\')) AND revoked_at IS NULL',
       {'userId': userId},
+    );
+  }
+
+  /// Revokes the old session and creates the new one in a single transaction
+  /// so a failed [createSession] cannot leave the user permanently locked out.
+  Future<void> rotateSession({
+    required String oldTokenHash,
+    required String sessionId,
+    required String userId,
+    required String refreshTokenHash,
+    required String role,
+    required DateTime expiresAt,
+  }) async {
+    await _pool.transactional((conn) async {
+      await conn.execute(
+        'UPDATE sessions SET revoked_at = NOW() '
+        'WHERE refresh_token_hash = :hash',
+        {'hash': oldTokenHash},
+      );
+      await conn.execute(
+        'INSERT INTO sessions '
+        '(session_id, user_id, refresh_token_hash, role, expires_at) '
+        "VALUES (UNHEX(REPLACE(:sessionId, '-', '')), "
+        "UNHEX(REPLACE(:userId, '-', '')), "
+        ':refreshTokenHash, :role, :expiresAt)',
+        {
+          'sessionId': sessionId,
+          'userId': userId,
+          'refreshTokenHash': refreshTokenHash,
+          'role': role,
+          'expiresAt': _formatDateTime(expiresAt),
+        },
+      );
+      await conn.execute(
+        'UPDATE users SET last_login_at = NOW() '
+        "WHERE user_id = UNHEX(REPLACE(:userId, '-', ''))",
+        {'userId': userId},
+      );
+    });
+  }
+
+  Future<void> insertAuditLog({
+    required String userId,
+    required String action,
+    required String targetType,
+    required String targetId,
+    String details = '{}',
+  }) async {
+    final auditId = generateUuid();
+    await _pool.execute(
+      'INSERT INTO audit_log '
+      '(audit_id, user_id, action, target_type, target_id, details, timestamp) '
+      "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
+      "UNHEX(REPLACE(:userId, '-', '')), "
+      ':action, :targetType, '
+      "UNHEX(REPLACE(:targetId, '-', '')), "
+      ':details, NOW())',
+      {
+        'auditId': auditId,
+        'userId': userId,
+        'action': action,
+        'targetType': targetType,
+        'targetId': targetId,
+        'details': details,
+      },
     );
   }
 
