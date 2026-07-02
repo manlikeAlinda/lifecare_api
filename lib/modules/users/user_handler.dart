@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:shelf/shelf.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/middleware/auth_middleware.dart';
@@ -54,13 +56,19 @@ class UserHandler {
   }
 
   Future<Response> getById(Request request, String id) async {
+    final caller = requireAuthUser(request);
+    // Staff can only fetch their own record; /v1/users/me exists for the common case.
+    if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
     final user = await _service.getUser(id);
     return okResponse(user);
   }
 
   Future<Response> update(Request request, String id) async {
+    final caller = requireAuthUser(request);
+    if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
     final body = await parseJsonBody(request);
     final user = await _service.updateUser(id, body);
+    unawaited(_service.writeUserAudit(actorId: caller.id, action: 'update_user', targetUserId: id));
     return okResponse(user);
   }
 
@@ -117,6 +125,8 @@ class UserHandler {
   }
 
   Future<Response> auditLog(Request request, String id) async {
+    final caller = requireAuthUser(request);
+    if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
     final limit = parseLimit(request);
     final offset = parseOffset(request);
     final (entries, total) = await _service.getUserAuditLog(id, limit: limit, offset: offset);

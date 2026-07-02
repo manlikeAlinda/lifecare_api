@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
+import 'package:lifecare_api/core/utils/uuid.dart';
 
 class UserRepository {
   final MySQLConnectionPool _pool;
@@ -248,6 +249,25 @@ class UserRepository {
       "VALUES (UNHEX(REPLACE(:userId, '-', '')), :prefs) "
       'ON DUPLICATE KEY UPDATE preferences = :prefs, updated_at = NOW()',
       {'userId': userId, 'prefs': json},
+    );
+  }
+
+  Future<void> writeAudit({
+    required String actorId,
+    required String action,
+    required String targetUserId,
+  }) async {
+    final auditId = generateUuid();
+    await _pool.execute(
+      'INSERT INTO audit_log (audit_id, user_id, action, target_type, target_id, timestamp) '
+      "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:actorId, '-', '')), "
+      ":action, 'user', UNHEX(REPLACE(:targetId, '-', '')), NOW())",
+      {
+        'auditId': auditId,
+        'actorId': actorId,
+        'action': action,
+        'targetId': targetUserId,
+      },
     );
   }
 

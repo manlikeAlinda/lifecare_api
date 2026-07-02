@@ -36,12 +36,17 @@ class AuthService {
     bool verified = false;
 
     if (algorithm == 'sha256') {
-      // SHA-256: live DB stores raw 32 binary bytes; compare byte-for-byte
+      // SHA-256 legacy path: compare byte-for-byte in constant time to avoid
+      // timing side channels, then migrate to bcrypt on success.
       final inputBytes = sha256.convert(utf8.encode(password)).bytes;
       final storedBytes = storedHash.codeUnits;
-      verified = inputBytes.length == storedBytes.length &&
-          List.generate(inputBytes.length, (i) => inputBytes[i] == storedBytes[i])
-              .every((b) => b);
+      if (inputBytes.length == storedBytes.length) {
+        int diff = 0;
+        for (var i = 0; i < inputBytes.length; i++) {
+          diff |= inputBytes[i] ^ storedBytes[i];
+        }
+        verified = diff == 0;
+      }
       if (verified) {
         // Migrate to bcrypt on successful login
         final bcryptHash = BCrypt.hashpw(password, BCrypt.gensalt());

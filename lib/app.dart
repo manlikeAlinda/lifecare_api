@@ -95,21 +95,6 @@ Handler buildApp() {
   router.get('/health', (Request _) => Response.ok('{"status":"ok"}',
       headers: {'content-type': 'application/json'}));
 
-  // DB diagnostic (public, temporary — remove after confirming DB connects)
-  router.get('/diag/db', (Request _) async {
-    try {
-      await Database.pool.execute('SELECT 1');
-      return Response.ok('{"db":"ok"}',
-          headers: {'content-type': 'application/json'});
-    } catch (e) {
-      final detail = e.toString().replaceAll('"', "'");
-      return Response.internalServerError(
-        body: '{"db":"error","detail":"$detail"}',
-        headers: {'content-type': 'application/json'},
-      );
-    }
-  });
-
   // ── Auth (IAM) ───────────────────────────────────────────────────────────────
   router.post(
     '/v1/auth/login',
@@ -128,10 +113,10 @@ Handler buildApp() {
     Pipeline().addMiddleware(auth).addHandler(authHandler.logout),
   );
 
-  // ── Users (admin only for create/delete/role; auth for read/update/password) ─
+  // ── Users (admin only for list/create/delete/role; auth for own record/password) ─
   router.get(
     '/v1/users',
-    Pipeline().addMiddleware(auth).addHandler(userHandler.list),
+    adminOnly.addHandler(userHandler.list),
   );
   router.post(
     '/v1/users',
