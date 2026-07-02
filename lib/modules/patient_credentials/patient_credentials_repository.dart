@@ -105,11 +105,12 @@ class PatientCredentialsRepository {
     try {
       await _pool.execute(
         'INSERT INTO audit_log '
-        '(audit_id, action, target_type, target_id, details) '
-        'VALUES (${uuidParam('auditId')}, '
+        '(audit_id, user_id, action, target_type, target_id, details) '
+        'VALUES (${uuidParam('auditId')}, ${uuidParam('actorId')}, '
         ':action, :targetType, ${uuidParam('targetId')}, \'{}\')',
         {
           'auditId': generateUuid(),
+          'actorId': actorId,
           'action': action,
           'targetType': 'patient_credentials',
           'targetId': patientId,

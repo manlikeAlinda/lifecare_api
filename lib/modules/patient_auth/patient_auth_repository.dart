@@ -94,6 +94,13 @@ class PatientAuthRepository {
     );
   }
 
+  Future<void> deleteSession(String refreshTokenHash) async {
+    await _pool.execute(
+      'DELETE FROM patient_sessions WHERE refresh_token_hash = :hash',
+      {'hash': refreshTokenHash},
+    );
+  }
+
   Future<void> updatePassword(String patientId, String passwordHash) async {
     await _pool.execute(
       'UPDATE patient_credentials '
@@ -135,13 +142,15 @@ class PatientAuthRepository {
     String? meta,
   }) async {
     try {
+      // For patient self-service actions, the actor IS the patient.
       await _pool.execute(
         'INSERT INTO audit_log '
-        '(audit_id, action, target_type, target_id, details) '
-        'VALUES (${uuidParam('auditId')}, '
+        '(audit_id, user_id, action, target_type, target_id, details) '
+        'VALUES (${uuidParam('auditId')}, ${uuidParam('patientId')}, '
         ':action, :targetType, ${uuidParam('targetId')}, \'{}\')',
         {
           'auditId': generateUuid(),
+          'patientId': patientId,
           'action': action,
           'targetType': 'patient_auth',
           'targetId': patientId,

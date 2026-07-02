@@ -15,53 +15,6 @@ class PatientAuthService {
 
   PatientAuthService(this._repo, this._authService);
 
-  Future<Map<String, dynamic>> activate({
-    required String phone,
-    required String pin,
-    required String newPassword,
-  }) async {
-    final credential = await _repo.findByPhone(phone);
-    if (credential == null) {
-      throw ApiError.notFound('No account found for this phone number');
-    }
-
-    if (credential['status'] != 'pending_activation') {
-      throw ApiError.validationError('Account already activated');
-    }
-
-    final storedPinHash = credential['activation_pin'] as String?;
-    if (storedPinHash == null || !BCrypt.checkpw(pin, storedPinHash)) {
-      throw ApiError.unauthenticated('Invalid PIN');
-    }
-
-    _validatePassword(newPassword);
-
-    final passwordHash = BCrypt.hashpw(newPassword, BCrypt.gensalt(logRounds: 12));
-    final credentialId = credential['credential_id'] as String;
-    final patientId = credential['patient_id'] as String;
-
-    await _repo.activateCredential(credentialId, passwordHash);
-
-    final patient = await _repo.findPatientById(patientId);
-    final patientCode = patient?['patient_code'] as String? ?? patientId;
-
-    final (accessToken, refreshToken, _) = await _createSession(
-      patientId: patientId,
-      phone: phone,
-      patientCode: patientCode,
-    );
-
-    await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_ACTIVATE');
-
-    return {
-      'access_token': accessToken,
-      'refresh_token': refreshToken,
-      'expires_in': AppConfig.jwtAccessExpiryMinutes * 60,
-      'patient_id': patientId,
-      'patient_code': patientCode,
-    };
-  }
-
   /// Called from the first-login activation screen.
   /// Identity is already proved by the JWT — no PIN re-entry required.
   Future<Map<String, dynamic>> activateWithToken({
@@ -104,11 +57,13 @@ class PatientAuthService {
   }) async {
     final credential = await _repo.findByPhone(phone);
     if (credential == null) {
-      throw ApiError.notFound('No account found for this phone number');
+      // Generic error — do not reveal whether the phone is registered.
+      throw ApiError.unauthenticated('Invalid phone number or PIN');
     }
 
     final status = credential['status'] as String;
     if (status == 'suspended') {
+      // Suspended is safe to surface — the user already proved they know the phone.
       throw ApiError.forbidden('Account suspended. Contact the clinic.');
     }
 
@@ -182,13 +137,13 @@ class PatientAuthService {
       throw ApiError.unauthenticated('Invalid or expired refresh token');
     }
 
-    final sessionId = session['session_id'] as String;
-    await _repo.updateSessionLastUsed(sessionId);
-
     final patientId = session['patient_id'] as String;
     final patient = await _repo.findPatientById(patientId);
     final patientCode = patient?['patient_code'] as String? ?? patientId;
     final phone = patient?['phone_e164'] as String? ?? '';
+
+    // Rotate: delete the consumed token and issue a fresh session.
+    await _repo.deleteSession(tokenHash);
 
     final accessToken = await _authService.issuePatientAccessToken(
       patientId: patientId,
@@ -196,8 +151,22 @@ class PatientAuthService {
       patientCode: patientCode,
     );
 
+    final newRefreshToken = _generateRefreshToken();
+    final newTokenHash = _hashToken(newRefreshToken);
+    final newSessionId = generateUuid();
+    final newExpiresAt = DateTime.now().toUtc().add(
+          Duration(days: AppConfig.jwtRefreshExpiryDays),
+        );
+    await _repo.insertSession(
+      sessionId: newSessionId,
+      patientId: patientId,
+      refreshTokenHash: newTokenHash,
+      expiresAt: newExpiresAt,
+    );
+
     return {
       'access_token': accessToken,
+      'refresh_token': newRefreshToken,
       'expires_in': AppConfig.jwtAccessExpiryMinutes * 60,
     };
   }

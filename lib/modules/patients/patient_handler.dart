@@ -13,11 +13,13 @@ class PatientHandler {
     final limit = parseLimit(request);
     final offset = parseOffset(request);
     final search = queryParam(request, 'search');
+    final statusParam = queryParam(request, 'status'); // 'active' | 'inactive' | null (all)
 
     final (patients, total) = await _service.listPatients(
       limit: limit,
       offset: offset,
       search: search,
+      status: statusParam,
     );
     return okListResponse(patients, total: total, limit: limit, offset: offset);
   }
@@ -63,6 +65,36 @@ class PatientHandler {
 
     final updates = (body['patients'] as List).cast<Map<String, dynamic>>();
     await _service.bulkUpdatePatients(updates, caller.id);
+    return noContentResponse();
+  }
+
+  Future<Response> bulkUpdateStatus(Request request) async {
+    final body = await parseJsonBody(request);
+    final caller = requireAuthUser(request);
+
+    Validator(body)
+      ..required('ids')
+      ..isList('ids')
+      ..required('is_active')
+      ..throwIfInvalid();
+
+    final ids = (body['ids'] as List).cast<String>();
+    final active = body['is_active'] as bool;
+    await _service.bulkSetStatus(ids, active, caller.id);
+    return noContentResponse();
+  }
+
+  Future<Response> bulkDelete(Request request) async {
+    final body = await parseJsonBody(request);
+    final caller = requireAuthUser(request);
+
+    Validator(body)
+      ..required('ids')
+      ..isList('ids')
+      ..throwIfInvalid();
+
+    final ids = (body['ids'] as List).cast<String>();
+    await _service.bulkDeletePatients(ids, caller.id);
     return noContentResponse();
   }
 
