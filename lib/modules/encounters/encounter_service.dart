@@ -1,13 +1,17 @@
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
+import 'package:lifecare_api/modules/catalog/catalog_repository.dart';
 import 'package:lifecare_api/modules/wallets/wallet_repository.dart';
+import 'encounter_pricing_resolver.dart';
 import 'encounter_repository.dart';
 
 class EncounterService {
   final EncounterRepository _repo;
   final WalletRepository _walletRepo;
+  final EncounterPricingResolver _pricing;
 
-  EncounterService(this._repo, this._walletRepo);
+  EncounterService(this._repo, this._walletRepo, CatalogPriceLookup catalogRepo)
+      : _pricing = EncounterPricingResolver(catalogRepo);
 
   Future<(List<Map<String, dynamic>>, int)> listEncounters({
     int limit = 20,
@@ -46,19 +50,16 @@ class EncounterService {
       throw ApiError.businessRule('No wallet found for this patient');
     }
 
-    final services = (data['services'] as List? ?? []).cast<Map<String, dynamic>>();
+    final rawServices = (data['services'] as List? ?? []).cast<Map<String, dynamic>>();
     // Accept both 'drug_lines' (Flutter client) and 'medications' (legacy) keys.
-    final medications = (data['drug_lines'] as List? ??
+    final rawMedications = (data['drug_lines'] as List? ??
                          data['medications'] as List? ?? [])
         .cast<Map<String, dynamic>>();
 
-    double total = 0;
-    for (final svc in services) {
-      total += _lineTotal(svc, priceKey: 'unit_price', altPriceKey: 'price');
-    }
-    for (final med in medications) {
-      total += _lineTotal(med, priceKey: 'unit_price', altPriceKey: 'rate');
-    }
+    final services = await _pricing.resolveServices(rawServices);
+    final medications = await _pricing.resolveDrugs(rawMedications);
+    final total = EncounterPricingResolver.sumTotal(services) +
+        EncounterPricingResolver.sumTotal(medications);
 
     return _repo.create(
       encounterId: generateUuid(),
@@ -91,24 +92,20 @@ class EncounterService {
     final hasLines =
         data.containsKey('services') || data.containsKey('drug_lines');
 
-    double? newTotal;
     List<Map<String, dynamic>>? newServices;
     List<Map<String, dynamic>>? newMedications;
+    double? newTotal;
 
     if (hasLines) {
-      newServices = (data['services'] as List? ?? []).cast<Map<String, dynamic>>();
-      newMedications = (data['drug_lines'] as List? ??
+      final rawServices = (data['services'] as List? ?? []).cast<Map<String, dynamic>>();
+      final rawMedications = (data['drug_lines'] as List? ??
                         data['medications'] as List? ?? [])
           .cast<Map<String, dynamic>>();
 
-      double total = 0;
-      for (final svc in newServices) {
-        total += _lineTotal(svc, priceKey: 'unit_price', altPriceKey: 'price');
-      }
-      for (final med in newMedications) {
-        total += _lineTotal(med, priceKey: 'unit_price', altPriceKey: 'rate');
-      }
-      newTotal = total;
+      newServices = await _pricing.resolveServices(rawServices);
+      newMedications = await _pricing.resolveDrugs(rawMedications);
+      newTotal = EncounterPricingResolver.sumTotal(newServices) +
+          EncounterPricingResolver.sumTotal(newMedications);
     }
 
     final updated = await _repo.update(
@@ -125,24 +122,5 @@ class EncounterService {
 
   Future<bool> deleteEncounter(String id, String deletedBy) async {
     return _repo.delete(id, deletedBy);
-  }
-
-  static double _lineTotal(
-    Map<String, dynamic> item, {
-    required String priceKey,
-    required String altPriceKey,
-  }) {
-    final preTotal = item['total_price'];
-    if (preTotal != null) return _toDouble(preTotal);
-    final price = _toDouble(item[priceKey] ?? item[altPriceKey]);
-    final qty = _toDouble(item['quantity'] ?? 1);
-    return price * qty;
-  }
-
-  static double _toDouble(dynamic v) {
-    if (v == null) return 0.0;
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v) ?? 0.0;
-    return 0.0;
   }
 }

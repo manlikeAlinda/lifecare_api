@@ -61,13 +61,24 @@ class WalletRepository {
     return _rowToMap(result.rows.first);
   }
 
+  /// Resolves the wallet for a patient id, including dependents/sub-account
+  /// rows where the wallet is keyed by patient_id rather than
+  /// primary_patient_id (migration 021 sub-account model). Uses the same
+  /// COALESCE the SELECT list already applies, then asserts the resolved
+  /// wallet actually belongs to the requested id before returning it —
+  /// this can never legitimately mismatch, but guards against ever handing
+  /// back another patient's wallet if that assumption turns out to be wrong.
   Future<Map<String, dynamic>?> findByPatientId(String patientId) async {
     final result = await _pool.execute(
-      "$_walletSelect WHERE primary_patient_id = UNHEX(REPLACE(:patientId, '-', '')) LIMIT 1",
+      '$_walletSelect '
+      "WHERE COALESCE(primary_patient_id, patient_id) = UNHEX(REPLACE(:patientId, '-', '')) "
+      'LIMIT 1',
       {'patientId': patientId},
     );
     if (result.rows.isEmpty) return null;
-    return _rowToMap(result.rows.first);
+    final wallet = _rowToMap(result.rows.first);
+    if (wallet['patient_id'] != patientId.toLowerCase()) return null;
+    return wallet;
   }
 
   // ── Ledger ────────────────────────────────────────────────────────────────

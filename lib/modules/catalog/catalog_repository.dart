@@ -2,7 +2,15 @@ import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
-class CatalogRepository {
+/// Narrow interface consumed by callers that only need to resolve an
+/// authoritative catalog rate (e.g. encounter billing), so they can be
+/// tested against a fake without a real DB connection.
+abstract class CatalogPriceLookup {
+  Future<Map<String, dynamic>?> findByDomainAndId(String domain, int id);
+  Future<Map<String, dynamic>?> findDrugById(int id);
+}
+
+class CatalogRepository implements CatalogPriceLookup {
   final MySQLConnectionPool _pool;
 
   CatalogRepository(this._pool);

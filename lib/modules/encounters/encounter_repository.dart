@@ -11,10 +11,12 @@ class EncounterRepository {
   // encounters:           encounter_id (PK), patient_id, dependent_id,
   //                       reference_number, service_id, service_type,
   //                       status, total_cost, visited_at, created_at
-  // encounter_services:   id (PK), encounter_id, service_id, service_name,
-  //                       price, quantity
-  // encounter_medications: id (PK), encounter_id, medication_id, drug_id,
-  //                        dosage_instructions, quantity, rate, medication_name
+  // encounter_services:   id (PK), encounter_id, service_id (legacy, unused —
+  //                       see migration 025), domain, domain_item_id,
+  //                       service_name, price, quantity
+  // encounter_medications: id (PK), encounter_id, medication_id (legacy,
+  //                        unused), drug_id, dosage_instructions, quantity,
+  //                        rate, medication_name
   // wallet_ledger:        ledger_id, wallet_id, type, amount_shillings
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -139,9 +141,7 @@ class EncounterRepository {
       "LOWER(CONCAT(SUBSTR(HEX(es.id),1,8),'-',SUBSTR(HEX(es.id),9,4),'-',"
       "SUBSTR(HEX(es.id),13,4),'-',SUBSTR(HEX(es.id),17,4),'-',"
       "SUBSTR(HEX(es.id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(es.service_id),1,8),'-',SUBSTR(HEX(es.service_id),9,4),'-',"
-      "SUBSTR(HEX(es.service_id),13,4),'-',SUBSTR(HEX(es.service_id),17,4),'-',"
-      "SUBSTR(HEX(es.service_id),21))) AS service_id, "
+      'es.domain, es.domain_item_id, '
       'es.service_name AS name, es.quantity, es.price AS unit_price, '
       '(es.price * es.quantity) AS total_price '
       'FROM encounter_services es '
@@ -175,7 +175,7 @@ class EncounterRepository {
       "LOWER(CONCAT(SUBSTR(HEX(em.id),1,8),'-',SUBSTR(HEX(em.id),9,4),'-',"
       "SUBSTR(HEX(em.id),13,4),'-',SUBSTR(HEX(em.id),17,4),'-',"
       "SUBSTR(HEX(em.id),21))) AS id, "
-      'em.medication_name AS name, em.quantity, '
+      'em.drug_id, em.medication_name AS name, em.quantity, '
       'em.rate AS unit_price, (em.rate * em.quantity) AS total_price, '
       'em.dosage_instructions '
       'FROM encounter_medications em '
@@ -229,45 +229,42 @@ class EncounterRepository {
         },
       );
 
-      // 2. Insert services.
+      // 2. Insert services. domain/domain_item_id/unit_price are already
+      // catalog-resolved by EncounterService — never re-derived from client input.
       for (final svc in services) {
-        final rawId = svc['catalog_item_id'] ?? svc['service_id'];
-        final serviceId = _toUuidString(rawId) ?? '00000000-0000-0000-0000-000000000000';
         await conn.execute(
           'INSERT INTO encounter_services '
-          '(id, encounter_id, service_id, service_name, price, quantity) '
+          '(id, encounter_id, domain, domain_item_id, service_name, price, quantity) '
           "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:encId, '-', '')), "
-          "UNHEX(REPLACE(:serviceId, '-', '')), :serviceName, :price, :qty)",
+          ':domain, :domainItemId, :serviceName, :price, :qty)',
           {
             'id': generateUuid(),
             'encId': encounterId,
-            'serviceId': serviceId,
-            'serviceName': svc['service_name'] as String? ?? svc['name'] as String? ?? '',
-            'price': _toDouble(svc['unit_price'] ?? svc['price']),
-            'qty': _toInt(svc['quantity'] ?? 1),
+            'domain': svc['domain'],
+            'domainItemId': svc['domain_item_id'],
+            'serviceName': svc['service_name'] as String? ?? '',
+            'price': svc['unit_price'] as double,
+            'qty': svc['quantity'] as int,
           },
         );
       }
 
-      // 3. Insert medications.
+      // 3. Insert medications. drug_id/unit_price are already catalog-resolved.
       for (final med in medications) {
-        final rawMedId = med['catalog_item_id'] ?? med['medication_id'];
-        final medId = _toUuidString(rawMedId);
         await conn.execute(
           'INSERT INTO encounter_medications '
-          '(id, encounter_id, medication_id, dosage_instructions, quantity, '
+          '(id, encounter_id, drug_id, dosage_instructions, quantity, '
           'rate, medication_name) '
           "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:encId, '-', '')), "
-          "${medId != null ? "UNHEX(REPLACE(:medId, '-', ''))" : 'NULL'}, "
-          ':dosage, :qty, :rate, :medName)',
+          ':drugId, :dosage, :qty, :rate, :medName)',
           {
             'id': generateUuid(),
             'encId': encounterId,
-            if (medId != null) 'medId': medId,
+            'drugId': med['drug_id'],
             'dosage': med['dosage_instructions'],
-            'qty': _toInt(med['quantity'] ?? 1),
-            'rate': _toDouble(med['unit_price'] ?? med['rate']),
-            'medName': med['medication_name'] as String? ?? med['name'] as String? ?? '',
+            'qty': med['quantity'] as int,
+            'rate': med['unit_price'] as double,
+            'medName': med['medication_name'] as String? ?? '',
           },
         );
       }
@@ -367,20 +364,19 @@ class EncounterRepository {
           {'id': id},
         );
         for (final svc in newServices) {
-          final rawId = svc['catalog_item_id'] ?? svc['service_id'];
-          final serviceId = _toUuidString(rawId) ?? '00000000-0000-0000-0000-000000000000';
           await conn.execute(
             'INSERT INTO encounter_services '
-            '(id, encounter_id, service_id, service_name, price, quantity) '
+            '(id, encounter_id, domain, domain_item_id, service_name, price, quantity) '
             "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:encId, '-', '')), "
-            "UNHEX(REPLACE(:serviceId, '-', '')), :serviceName, :price, :qty)",
+            ':domain, :domainItemId, :serviceName, :price, :qty)',
             {
               'id': generateUuid(),
               'encId': id,
-              'serviceId': serviceId,
-              'serviceName': svc['service_name'] as String? ?? svc['name'] as String? ?? '',
-              'price': _toDouble(svc['unit_price'] ?? svc['price']),
-              'qty': _toInt(svc['quantity'] ?? 1),
+              'domain': svc['domain'],
+              'domainItemId': svc['domain_item_id'],
+              'serviceName': svc['service_name'] as String? ?? '',
+              'price': svc['unit_price'] as double,
+              'qty': svc['quantity'] as int,
             },
           );
         }
@@ -393,23 +389,20 @@ class EncounterRepository {
           {'id': id},
         );
         for (final med in newMedications) {
-          final rawMedId = med['catalog_item_id'] ?? med['medication_id'];
-          final medId = _toUuidString(rawMedId);
           await conn.execute(
             'INSERT INTO encounter_medications '
-            '(id, encounter_id, medication_id, dosage_instructions, quantity, '
+            '(id, encounter_id, drug_id, dosage_instructions, quantity, '
             'rate, medication_name) '
             "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:encId, '-', '')), "
-            "${medId != null ? "UNHEX(REPLACE(:medId, '-', ''))" : 'NULL'}, "
-            ':dosage, :qty, :rate, :medName)',
+            ':drugId, :dosage, :qty, :rate, :medName)',
             {
               'id': generateUuid(),
               'encId': id,
-              if (medId != null) 'medId': medId,
+              'drugId': med['drug_id'],
               'dosage': med['dosage_instructions'],
-              'qty': _toInt(med['quantity'] ?? 1),
-              'rate': _toDouble(med['unit_price'] ?? med['rate']),
-              'medName': med['medication_name'] as String? ?? med['name'] as String? ?? '',
+              'qty': med['quantity'] as int,
+              'rate': med['unit_price'] as double,
+              'medName': med['medication_name'] as String? ?? '',
             },
           );
         }
@@ -548,27 +541,6 @@ class EncounterRepository {
     if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v) ?? 0.0;
     return 0.0;
-  }
-
-  static int _toInt(dynamic v) {
-    if (v == null) return 1;
-    if (v is int) return v;
-    if (v is num) return v.toInt();
-    if (v is String) return int.tryParse(v) ?? 1;
-    return 1;
-  }
-
-  static String? _toUuidString(dynamic v) {
-    if (v == null) return null;
-    final s = v.toString();
-    final stripped = s.replaceAll('-', '');
-    if (stripped.length == 32 && RegExp(r'^[0-9a-fA-F]+$').hasMatch(stripped)) {
-      if (s.contains('-')) return s;
-      return '${stripped.substring(0, 8)}-${stripped.substring(8, 12)}-'
-          '${stripped.substring(12, 16)}-${stripped.substring(16, 20)}-'
-          '${stripped.substring(20)}';
-    }
-    return null;
   }
 
   String _nowString() {

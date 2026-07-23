@@ -62,7 +62,7 @@ Handler buildApp() {
   final userService = UserService(userRepo);
   final patientService = PatientService(patientRepo);
   final walletService = WalletService(walletRepo);
-  final encounterService = EncounterService(encounterRepo, walletRepo);
+  final encounterService = EncounterService(encounterRepo, walletRepo, catalogRepo);
   final catalogService = CatalogService(catalogRepo);
   final analyticsService = AnalyticsService(analyticsRepo);
   final emailService = EmailService();
@@ -672,11 +672,7 @@ Middleware _errorHandlingMiddleware() {
       } catch (e, stack) {
         log.severe('Unhandled error on ${request.method} ${request.url}', e, stack);
         final requestId = getRequestId(request);
-        // Include raw error detail so the client can surface it during development.
-        return errorResponse(
-          ApiError.internal('Internal error: $e'),
-          requestId,
-        );
+        return errorResponse(ApiError.internal(), requestId);
       }
     };
   };

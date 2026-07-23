@@ -21,6 +21,7 @@ Future<void> _start() async {
   log.info('Starting LifeCare API...');
 
   AppConfig.load();
+  AppConfig.validateSecurityConfig();
 
   await Database.init();
 
