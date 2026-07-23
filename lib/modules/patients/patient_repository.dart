@@ -8,10 +8,10 @@ class PatientRepository {
 
   PatientRepository(this._pool);
 
-  // Live DB columns (migration 021 applied):
+  // Live DB columns (migration 024 applied):
   //   patient_id, patient_code, full_name, phone_e164, national_id_hash,
   //   is_active, created_at, account_type,
-  //   national_id, primary_account_id, relationship
+  //   national_id, primary_account_id, relationship, deleted_at
 
   static const _uuidId =
       "LOWER(CONCAT(SUBSTR(HEX(patient_id),1,8),'-',SUBSTR(HEX(patient_id),9,4),'-',"
@@ -38,7 +38,7 @@ class PatientRepository {
     String? search,
     bool? activeOnly, // null = all, true = active only, false = inactive only
   }) async {
-    final conditions = <String>['primary_account_id IS NULL'];
+    final conditions = <String>['primary_account_id IS NULL', 'deleted_at IS NULL'];
 
     // countParams only contains params that appear in the WHERE clause.
     final countParams = <String, dynamic>{};
@@ -73,7 +73,8 @@ class PatientRepository {
 
   Future<Map<String, dynamic>?> findById(String id) async {
     final result = await _pool.execute(
-      "$_selectFields WHERE patient_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
+      "$_selectFields WHERE patient_id = UNHEX(REPLACE(:id, '-', '')) "
+      'AND deleted_at IS NULL LIMIT 1',
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
@@ -82,7 +83,7 @@ class PatientRepository {
 
   Future<Map<String, dynamic>?> findByPatientCode(String code) async {
     final result = await _pool.execute(
-      '$_selectFields WHERE patient_code = :code LIMIT 1',
+      '$_selectFields WHERE patient_code = :code AND deleted_at IS NULL LIMIT 1',
       {'code': code},
     );
     if (result.rows.isEmpty) return null;
@@ -96,6 +97,7 @@ class PatientRepository {
   ) async {
     final result = await _pool.execute(
       "$_selectFields WHERE primary_account_id = UNHEX(REPLACE(:id, '-', '')) "
+      'AND deleted_at IS NULL '
       'ORDER BY full_name',
       {'id': primaryAccountId},
     );
@@ -294,6 +296,19 @@ class PatientRepository {
       }
       rethrow;
     }
+  }
+
+  /// Soft-deletes a sub-patient (beneficiary). Unlike [hardDelete], this
+  /// leaves encounters and wallet_ledger history intact — the shared wallet's
+  /// ledger entries reference wallet_id, not patient_id, so hard-deleting the
+  /// beneficiary's encounters would sever the audit trail for a wallet debit
+  /// that remains on the books.
+  Future<void> softDeleteSubPatient(String id) async {
+    await _pool.execute(
+      "UPDATE patients SET deleted_at = NOW(6) "
+      "WHERE patient_id = UNHEX(REPLACE(:id, '-', '')) AND deleted_at IS NULL",
+      {'id': id},
+    );
   }
 
   // ── Legacy dependent methods (kept for reference; app now uses sub-patients) ─

@@ -165,7 +165,7 @@ class PatientService {
   Future<void> deleteSubPatient(String subPatientId, String deletedBy) async {
     final patient = await _repo.findById(subPatientId);
     if (patient == null) throw ApiError.notFound('Beneficiary not found');
-    await _repo.hardDelete(subPatientId);
+    await _repo.softDeleteSubPatient(subPatientId);
   }
 
   // ── Legacy aliases (kept so old dependents routes still work) ───────────────
