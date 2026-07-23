@@ -51,6 +51,13 @@ class AuthService {
       if (verified) {
         final bcryptHash = BCrypt.hashpw(password, BCrypt.gensalt());
         await _repo.updatePasswordHash(userId, bcryptHash, 'bcrypt');
+        await _repo.insertAuditLog(
+          userId: userId,
+          action: 'PASSWORD_HASH_UPGRADED',
+          targetType: 'user',
+          targetId: userId,
+          details: '{"from":"sha256","to":"bcrypt"}',
+        );
       }
     } else {
       verified = BCrypt.checkpw(password, storedHash);
