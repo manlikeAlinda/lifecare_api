@@ -502,6 +502,7 @@ Handler buildApp() {
         offset: offset,
         dateFrom: qp['dateFrom'],
         dateTo: qp['dateTo'],
+        search: qp['search'],
       );
 
       final visits = encounters.map((e) {
