@@ -22,7 +22,10 @@ class UserService {
     return user;
   }
 
-  Future<Map<String, dynamic>> createUser(Map<String, dynamic> data) async {
+  Future<Map<String, dynamic>> createUser(
+    Map<String, dynamic> data,
+    String actorId,
+  ) async {
     final existing = await _repo.findByUsername(data['username'] as String);
     if (existing != null) {
       throw ApiError.conflict('Username already taken');
@@ -39,6 +42,7 @@ class UserService {
       username: data['username'] as String,
       fullName: data['full_name'] as String,
       passwordHash: passwordHash,
+      actorId: actorId,
       role: data['role'] as String? ?? 'staff',
       email: data['email'] as String?,
     );
@@ -51,6 +55,7 @@ class UserService {
   Future<Map<String, dynamic>> updateUser(
     String id,
     Map<String, dynamic> data,
+    String actorId,
   ) async {
     final user = await _repo.findById(id);
     if (user == null) throw ApiError.notFound('User not found');
@@ -65,24 +70,24 @@ class UserService {
       allowed['is_active'] = (v == true || v == 1) ? 1 : 0;
     }
 
-    final updated = await _repo.update(id, allowed);
+    final updated = await _repo.update(id, allowed, actorId);
     return updated!;
   }
 
-  Future<void> deleteUser(String id) async {
+  /// Soft-deletes the user and revokes all active sessions atomically
+  /// (see [UserRepository.deleteUser]).
+  Future<void> deleteUser(String id, String actorId) async {
     final user = await _repo.findById(id);
     if (user == null) throw ApiError.notFound('User not found');
-    await _repo.softDelete(id);
-    // Invalidate all active refresh tokens so the deleted user cannot continue sessions.
-    await _repo.revokeAllSessions(id);
+    await _repo.deleteUser(id, actorId);
   }
 
-  Future<void> changePassword(String id, String newPassword) async {
+  Future<void> changePassword(String id, String newPassword, String actorId) async {
     final user = await _repo.findById(id);
     if (user == null) throw ApiError.notFound('User not found');
 
     final newHash = BCrypt.hashpw(newPassword, BCrypt.gensalt());
-    await _repo.updatePassword(id, newHash);
+    await _repo.updatePassword(id, newHash, actorId);
   }
 
   Future<Map<String, dynamic>> getPreferences(String id) async {
@@ -107,27 +112,16 @@ class UserService {
     return _repo.getAuditLog(id, limit: limit, offset: offset);
   }
 
-  Future<void> revokeAllSessions(String id) async {
+  Future<void> revokeAllSessions(String id, String actorId) async {
     final user = await _repo.findById(id);
     if (user == null) throw ApiError.notFound('User not found');
-    await _repo.revokeAllSessions(id);
+    await _repo.revokeAllSessions(id, actorId);
   }
 
-  Future<Map<String, dynamic>> changeRole(String id, String role) async {
+  Future<Map<String, dynamic>> changeRole(String id, String role, String actorId) async {
     final user = await _repo.findById(id);
     if (user == null) throw ApiError.notFound('User not found');
-    await _repo.updateRole(id, role);
+    await _repo.updateRole(id, role, actorId);
     return (await _repo.findById(id))!;
-  }
-
-  /// Non-fatal audit write — failures are swallowed so they never abort the main response.
-  Future<void> writeUserAudit({
-    required String actorId,
-    required String action,
-    required String targetUserId,
-  }) async {
-    try {
-      await _repo.writeAudit(actorId: actorId, action: action, targetUserId: targetUserId);
-    } catch (_) {}
   }
 }

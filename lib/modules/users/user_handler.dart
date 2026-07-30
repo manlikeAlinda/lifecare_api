@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:shelf/shelf.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/middleware/auth_middleware.dart';
@@ -35,6 +33,7 @@ class UserHandler {
   }
 
   Future<Response> create(Request request) async {
+    final caller = requireAuthUser(request);
     final body = await parseJsonBody(request);
 
     Validator(body)
@@ -45,7 +44,7 @@ class UserHandler {
       ..oneOf('role', ['admin', 'staff'])
       ..throwIfInvalid();
 
-    final user = await _service.createUser(body);
+    final user = await _service.createUser(body, caller.id);
     return createdResponse(user);
   }
 
@@ -67,8 +66,7 @@ class UserHandler {
     final caller = requireAuthUser(request);
     if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
     final body = await parseJsonBody(request);
-    final user = await _service.updateUser(id, body);
-    unawaited(_service.writeUserAudit(actorId: caller.id, action: 'update_user', targetUserId: id));
+    final user = await _service.updateUser(id, body, caller.id);
     return okResponse(user);
   }
 
@@ -78,7 +76,7 @@ class UserHandler {
     if (caller.id == id) {
       throw ApiError.businessRule('Cannot delete your own account');
     }
-    await _service.deleteUser(id);
+    await _service.deleteUser(id, caller.id);
     return noContentResponse();
   }
 
@@ -104,7 +102,7 @@ class UserHandler {
       ..minLength('password', 8, label: 'Password')
       ..throwIfInvalid();
 
-    await _service.changePassword(id, newPw!);
+    await _service.changePassword(id, newPw!, caller.id);
     return noContentResponse();
   }
 
@@ -137,11 +135,12 @@ class UserHandler {
     final caller = requireAuthUser(request);
     // Admins can revoke anyone; staff can only revoke their own.
     if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
-    await _service.revokeAllSessions(id);
+    await _service.revokeAllSessions(id, caller.id);
     return noContentResponse();
   }
 
   Future<Response> changeRole(Request request, String id) async {
+    final caller = requireAuthUser(request);
     final body = await parseJsonBody(request);
 
     Validator(body)
@@ -149,7 +148,7 @@ class UserHandler {
       ..oneOf('role', ['admin', 'staff'])
       ..throwIfInvalid();
 
-    final user = await _service.changeRole(id, body['role'] as String);
+    final user = await _service.changeRole(id, body['role'] as String, caller.id);
     return okResponse(user);
   }
 }

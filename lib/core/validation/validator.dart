@@ -126,6 +126,44 @@ class Validator {
     return this;
   }
 
+  /// Like [isList], but also rejects a list containing non-object entries
+  /// (e.g. `["foo"]`) so callers can safely `.cast<Map<String, dynamic>>()`
+  /// afterwards instead of hitting an uncaught CastError.
+  Validator isListOfObjects(String field, {String? label}) {
+    final value = _get(field);
+    if (value == null) return this;
+    if (value is! List || value.any((e) => e is! Map)) {
+      _errors.add({
+        'field': field,
+        'message': '${label ?? field} must be an array of objects',
+      });
+    }
+    return this;
+  }
+
+  /// Like [isList], but also rejects a list containing non-string entries
+  /// so callers can safely `.cast<String>()` afterwards.
+  Validator isListOfStrings(String field, {String? label}) {
+    final value = _get(field);
+    if (value == null) return this;
+    if (value is! List || value.any((e) => e is! String)) {
+      _errors.add({
+        'field': field,
+        'message': '${label ?? field} must be an array of strings',
+      });
+    }
+    return this;
+  }
+
+  Validator isBool(String field, {String? label}) {
+    final value = _get(field);
+    if (value == null) return this;
+    if (value is! bool) {
+      _errors.add({'field': field, 'message': '${label ?? field} must be true or false'});
+    }
+    return this;
+  }
+
   bool get isValid => _errors.isEmpty;
 
   void throwIfInvalid() {

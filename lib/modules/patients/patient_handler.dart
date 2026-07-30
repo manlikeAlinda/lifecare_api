@@ -60,7 +60,7 @@ class PatientHandler {
 
     Validator(body)
       ..required('patients')
-      ..isList('patients')
+      ..isListOfObjects('patients')
       ..throwIfInvalid();
 
     final updates = (body['patients'] as List).cast<Map<String, dynamic>>();
@@ -74,8 +74,9 @@ class PatientHandler {
 
     Validator(body)
       ..required('ids')
-      ..isList('ids')
+      ..isListOfStrings('ids')
       ..required('is_active')
+      ..isBool('is_active')
       ..throwIfInvalid();
 
     final ids = (body['ids'] as List).cast<String>();
@@ -90,7 +91,7 @@ class PatientHandler {
 
     Validator(body)
       ..required('ids')
-      ..isList('ids')
+      ..isListOfStrings('ids')
       ..throwIfInvalid();
 
     final ids = (body['ids'] as List).cast<String>();

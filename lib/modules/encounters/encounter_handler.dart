@@ -41,9 +41,9 @@ class EncounterHandler {
     Validator(body)
       ..required('patient_id')
       ..uuid('patient_id', label: 'patient_id')
-      ..isList('services')
-      ..isList('drug_lines')
-      ..isList('medications')
+      ..isListOfObjects('services')
+      ..isListOfObjects('drug_lines')
+      ..isListOfObjects('medications')
       ..throwIfInvalid();
 
     // Require at least one service or drug line so we never create an
@@ -70,9 +70,9 @@ class EncounterHandler {
 
     Validator(body)
       ..oneOf('status', _validStatuses)
-      ..isList('services')
-      ..isList('drug_lines')
-      ..isList('medications')
+      ..isListOfObjects('services')
+      ..isListOfObjects('drug_lines')
+      ..isListOfObjects('medications')
       ..throwIfInvalid();
 
     final encounter = await _service.updateEncounter(id, body, caller.id);

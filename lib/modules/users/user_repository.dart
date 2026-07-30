@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/audit/audit_writer.dart' as audit;
 import 'package:lifecare_api/core/utils/row_map.dart';
-import 'package:lifecare_api/core/utils/uuid.dart';
 
 class UserRepository {
   final MySQLConnectionPool _pool;
@@ -87,6 +87,7 @@ class UserRepository {
     required String username,
     required String fullName,
     required String passwordHash,
+    required String actorId,
     String role = 'staff',
     String? email,
   }) async {
@@ -111,6 +112,15 @@ class UserRepository {
         "FROM roles WHERE role_key = :role LIMIT 1",
         {'id': id, 'role': role},
       );
+
+      await audit.writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'create_user',
+        targetType: 'user',
+        targetIdUuid: id,
+        after: {'username': username, 'full_name': fullName, 'email': email, 'role': role},
+      );
     });
     return (await findById(id))!;
   }
@@ -126,6 +136,7 @@ class UserRepository {
   Future<Map<String, dynamic>?> update(
     String id,
     Map<String, dynamic> fields,
+    String actorId,
   ) async {
     if (fields.isEmpty) return findById(id);
 
@@ -145,38 +156,105 @@ class UserRepository {
 
     final params = Map<String, dynamic>.from(fields)..['id'] = id;
 
-    await _pool.execute(
-      "UPDATE users SET $setClauses WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
-      params,
-    );
+    await _pool.transactional((conn) async {
+      final before = await findById(id);
+
+      await conn.execute(
+        "UPDATE users SET $setClauses WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
+        params,
+      );
+
+      await audit.writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'update_user',
+        targetType: 'user',
+        targetIdUuid: id,
+        before: before,
+        after: {...?before, ...fields},
+      );
+    });
     return findById(id);
   }
 
-  Future<void> updatePassword(String id, String passwordHash) async {
-    await _pool.execute(
-      'UPDATE users SET password_hash = :hash '
-      "WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
-      {'hash': passwordHash, 'id': id},
-    );
+  Future<void> updatePassword(String id, String passwordHash, String actorId) async {
+    await _pool.transactional((conn) async {
+      await conn.execute(
+        'UPDATE users SET password_hash = :hash '
+        "WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
+        {'hash': passwordHash, 'id': id},
+      );
+
+      // Never record hash material — just that a change happened.
+      await audit.writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'change_password',
+        targetType: 'user',
+        targetIdUuid: id,
+      );
+    });
   }
 
-  Future<void> updateRole(String id, String role) async {
-    // Update or insert the user's role in user_roles
-    await _pool.execute(
-      'INSERT INTO user_roles (user_id, role_id, assigned_by) '
-      "SELECT UNHEX(REPLACE(:id, '-', '')), role_id, UNHEX(REPLACE(:id, '-', '')) "
-      'FROM roles WHERE role_key = :role LIMIT 1 '
-      'ON DUPLICATE KEY UPDATE role_id = VALUES(role_id)',
-      {'id': id, 'role': role},
-    );
+  Future<void> updateRole(String id, String role, String actorId) async {
+    await _pool.transactional((conn) async {
+      final roleResult = await conn.execute(
+        'SELECT r.role_key FROM user_roles ur '
+        'JOIN roles r ON r.role_id = ur.role_id '
+        "WHERE ur.user_id = UNHEX(REPLACE(:id, '-', ''))",
+        {'id': id},
+      );
+      final oldRole =
+          roleResult.rows.isEmpty ? null : roleResult.rows.first.assoc()['role_key'];
+
+      // Update or insert the user's role in user_roles
+      await conn.execute(
+        'INSERT INTO user_roles (user_id, role_id, assigned_by) '
+        "SELECT UNHEX(REPLACE(:id, '-', '')), role_id, UNHEX(REPLACE(:id, '-', '')) "
+        'FROM roles WHERE role_key = :role LIMIT 1 '
+        'ON DUPLICATE KEY UPDATE role_id = VALUES(role_id)',
+        {'id': id, 'role': role},
+      );
+
+      await audit.writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'change_role',
+        targetType: 'user',
+        targetIdUuid: id,
+        before: {'role': oldRole},
+        after: {'role': role},
+      );
+    });
   }
 
-  Future<void> softDelete(String id) async {
-    await _pool.execute(
-      'UPDATE users SET is_active = 0 '
-      "WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
-      {'id': id},
-    );
+  /// Soft-deletes the user and revokes all active sessions in the same
+  /// transaction, so a deleted account can never be left with a live session.
+  Future<void> deleteUser(String id, String actorId) async {
+    await _pool.transactional((conn) async {
+      final before = await findById(id);
+
+      await conn.execute(
+        'UPDATE users SET is_active = 0 '
+        "WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
+        {'id': id},
+      );
+      await conn.execute(
+        'UPDATE sessions SET revoked_at = NOW() '
+        "WHERE user_id = UNHEX(REPLACE(:id, '-', '')) AND revoked_at IS NULL",
+        {'id': id},
+      );
+
+      await audit.writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'delete_user',
+        targetType: 'user',
+        targetIdUuid: id,
+        before: before,
+        after: {...?before, 'is_active': false},
+      );
+    });
   }
 
   Future<(List<Map<String, dynamic>>, int)> getAuditLog(
@@ -213,12 +291,22 @@ class UserRepository {
     );
   }
 
-  Future<void> revokeAllSessions(String userId) async {
-    await _pool.execute(
-      'UPDATE sessions SET revoked_at = NOW() '
-      "WHERE user_id = UNHEX(REPLACE(:userId, '-', '')) AND revoked_at IS NULL",
-      {'userId': userId},
-    );
+  Future<void> revokeAllSessions(String userId, String actorId) async {
+    await _pool.transactional((conn) async {
+      await conn.execute(
+        'UPDATE sessions SET revoked_at = NOW() '
+        "WHERE user_id = UNHEX(REPLACE(:userId, '-', '')) AND revoked_at IS NULL",
+        {'userId': userId},
+      );
+
+      await audit.writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'revoke_sessions',
+        targetType: 'user',
+        targetIdUuid: userId,
+      );
+    });
   }
 
   /// Returns the stored preferences map, or an empty map if no row exists yet.
@@ -249,25 +337,6 @@ class UserRepository {
       "VALUES (UNHEX(REPLACE(:userId, '-', '')), :prefs) "
       'ON DUPLICATE KEY UPDATE preferences = :prefs, updated_at = NOW()',
       {'userId': userId, 'prefs': json},
-    );
-  }
-
-  Future<void> writeAudit({
-    required String actorId,
-    required String action,
-    required String targetUserId,
-  }) async {
-    final auditId = generateUuid();
-    await _pool.execute(
-      'INSERT INTO audit_log (audit_id, user_id, action, target_type, target_id, timestamp) '
-      "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:actorId, '-', '')), "
-      ":action, 'user', UNHEX(REPLACE(:targetId, '-', '')), NOW())",
-      {
-        'auditId': auditId,
-        'actorId': actorId,
-        'action': action,
-        'targetId': targetUserId,
-      },
     );
   }
 

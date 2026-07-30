@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:shelf/shelf.dart';
-import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/middleware/auth_middleware.dart';
 import 'package:lifecare_api/core/utils/response.dart';
+import 'package:lifecare_api/core/validation/validator.dart';
 import 'deposit_service.dart';
 
 class DepositHandler {
@@ -16,9 +16,14 @@ class DepositHandler {
     final patient = requirePatientUser(request);
     final body    = await parseJsonBody(request);
 
+    Validator(body)
+      ..required('amount')
+      ..positiveInteger('amount')
+      ..throwIfInvalid();
+
     final amountRaw = body['amount'];
-    if (amountRaw == null) throw ApiError.validationError('amount is required');
-    final amountShillings = (amountRaw as num).toInt();
+    final amountShillings =
+        amountRaw is num ? amountRaw.toInt() : int.parse(amountRaw.toString());
 
     final result = await _service.initiateDeposit(
       patientId:      patient.id,
