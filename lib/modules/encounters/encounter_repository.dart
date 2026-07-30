@@ -321,6 +321,7 @@ class EncounterRepository {
     List<Map<String, dynamic>>? newMedications,
     double? newTotal,
     double oldTotal = 0,
+    String? walletId,
   }) async {
     // Scalar fields that map directly to DB columns.
     const colMap = {
@@ -408,41 +409,32 @@ class EncounterRepository {
         }
       }
 
-      // Adjust wallet when total changed.
-      if (newTotal != null) {
+      // Adjust wallet when total changed. walletId is resolved by the caller
+      // via WalletRepository.findByPatientId — never re-derived here with a
+      // raw patient_id join, which silently skips beneficiaries whose wallet
+      // is keyed to the primary account holder, not their own patient_id.
+      if (newTotal != null && walletId != null) {
         final delta = newTotal - oldTotal;
         if (delta != 0) {
           final deltaInt = delta.round().abs();
           final ledgerType = delta > 0 ? 'deduction' : 'reversal';
-          // Find the patient's wallet from the encounter row.
-          final walletResult = await conn.execute(
-            'SELECT w.wallet_id '
-            'FROM wallets w '
-            'JOIN encounters e ON e.patient_id = w.patient_id '
-            "WHERE e.encounter_id = UNHEX(REPLACE(:encId, '-', '')) LIMIT 1",
-            {'encId': id},
+          await conn.execute(
+            'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+            "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(REPLACE(:walletId, '-', '')), :type, :amount)",
+            {
+              'ledgerId': generateUuid(),
+              'walletId': walletId,
+              'type': ledgerType,
+              'amount': deltaInt,
+            },
           );
-          if (walletResult.rows.isNotEmpty) {
-            final walletRow = rowToMap(walletResult.rows.first);
-            final walletHex = walletRow['wallet_id'] as String;
-            await conn.execute(
-              'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
-              "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(:walletHex), :type, :amount)",
-              {
-                'ledgerId': generateUuid(),
-                'walletHex': walletHex,
-                'type': ledgerType,
-                'amount': deltaInt,
-              },
-            );
-            final sign = delta > 0 ? '-' : '+';
-            await conn.execute(
-              'UPDATE wallets SET balance_shillings = balance_shillings $sign :amount, '
-              '    last_activity_at = NOW() '
-              'WHERE wallet_id = UNHEX(:walletHex)',
-              {'amount': deltaInt, 'walletHex': walletHex},
-            );
-          }
+          final sign = delta > 0 ? '-' : '+';
+          await conn.execute(
+            'UPDATE wallets SET balance_shillings = balance_shillings $sign :amount, '
+            '    last_activity_at = NOW() '
+            "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
+            {'amount': deltaInt, 'walletId': walletId},
+          );
         }
       }
 
@@ -472,38 +464,38 @@ class EncounterRepository {
   /// Hard-deletes the encounter. Runs inside a transaction:
   /// reverses the wallet ledger deduction, restores the balance,
   /// deletes child rows (via CASCADE), then writes an audit entry.
-  Future<bool> delete(String id, String deletedBy) async {
-    // Fetch encounter + wallet before we delete anything.
+  /// [walletId] must be resolved by the caller via
+  /// WalletRepository.findByPatientId — see EncounterService.deleteEncounter.
+  /// A raw join on encounters.patient_id silently misses beneficiaries, whose
+  /// wallet is keyed to the primary account holder, not their own patient_id.
+  Future<bool> delete(String id, String deletedBy, {String? walletId}) async {
+    // Fetch the encounter's total_cost before we delete anything.
     final encResult = await _pool.execute(
-      'SELECT e.total_cost, w.wallet_id '
-      'FROM encounters e '
-      'LEFT JOIN wallets w ON w.patient_id = e.patient_id '
-      "WHERE e.encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
+      "SELECT total_cost FROM encounters WHERE encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
     if (encResult.rows.isEmpty) return false;
 
     final encRow = rowToMap(encResult.rows.first);
     final totalCost = (_toDouble(encRow['total_cost'])).round();
-    final walletHex = encRow['wallet_id'] as String?;
 
     await _pool.transactional((conn) async {
       // 1. Reverse wallet ledger + balance if a wallet exists and cost > 0.
-      if (walletHex != null && totalCost > 0) {
+      if (walletId != null && totalCost > 0) {
         await conn.execute(
           'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
-          "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(:walletHex), 'reversal', :amount)",
+          "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(REPLACE(:walletId, '-', '')), 'reversal', :amount)",
           {
             'ledgerId': generateUuid(),
-            'walletHex': walletHex,
+            'walletId': walletId,
             'amount': totalCost,
           },
         );
         await conn.execute(
           'UPDATE wallets SET balance_shillings = balance_shillings + :amount, '
           '    last_activity_at = NOW() '
-          'WHERE wallet_id = UNHEX(:walletHex)',
-          {'amount': totalCost, 'walletHex': walletHex},
+          "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
+          {'amount': totalCost, 'walletId': walletId},
         );
       }
 

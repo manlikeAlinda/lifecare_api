@@ -108,6 +108,17 @@ class EncounterService {
           EncounterPricingResolver.sumTotal(newMedications);
     }
 
+    // Resolve the wallet the same way encounter creation does — via
+    // WalletRepository.findByPatientId, which correctly follows the
+    // primary/dependent account link. The repository must not re-derive
+    // this with its own naive join (see deleteEncounter for why that broke).
+    String? walletId;
+    if (newTotal != null) {
+      final wallet =
+          await _walletRepo.findByPatientId(encounter['patient_id'] as String);
+      walletId = wallet?['id'] as String?;
+    }
+
     final updated = await _repo.update(
       id,
       data,
@@ -116,11 +127,21 @@ class EncounterService {
       newMedications: newMedications,
       newTotal: newTotal,
       oldTotal: (encounter['total_cost'] as num?)?.toDouble() ?? 0,
+      walletId: walletId,
     );
     return updated!;
   }
 
   Future<bool> deleteEncounter(String id, String deletedBy) async {
-    return _repo.delete(id, deletedBy);
+    final encounter = await _repo.findById(id);
+    if (encounter == null) return false;
+
+    // Resolve via WalletRepository.findByPatientId rather than a raw join on
+    // encounters.patient_id, so beneficiaries (whose wallet is keyed to the
+    // primary account holder, not their own patient_id) reverse correctly too.
+    final wallet =
+        await _walletRepo.findByPatientId(encounter['patient_id'] as String);
+
+    return _repo.delete(id, deletedBy, walletId: wallet?['id'] as String?);
   }
 }
