@@ -226,8 +226,9 @@ class PatientRepository {
   /// Delete order (avoids FK violations):
   ///   1. patient_sessions + patient_credentials (sub-patients + primary)
   ///   2. encounters (cascade-deletes encounter_services/medications/drugs)
-  ///   3. wallet_ledger + provider_transactions + wallets
-  ///   4. sub-patients, then the primary patient row
+  ///   3. legacy dependents rows referencing this wallet (fk_dep_wallet)
+  ///   4. wallet_ledger + provider_transactions + wallets
+  ///   5. sub-patients, then the primary patient row
   Future<void> hardDelete(String id) async {
     try {
       await _pool.transactional((conn) async {
@@ -260,7 +261,18 @@ class PatientRepository {
           );
         }
 
-        // 2. Wallet chain (primary account only; sub-patients share it).
+        // 2. Legacy dependents rows still referencing this wallet (migration
+        // 021 kept them around for audit/FK history after converting
+        // dependents to real patient rows — fk_dep_wallet has no ON DELETE
+        // clause, so it blocks the wallet delete below unless cleared first).
+        await conn.execute(
+          "DELETE d FROM dependents d "
+          "INNER JOIN wallets w ON d.wallet_id = w.wallet_id "
+          "WHERE w.primary_patient_id = UNHEX(REPLACE(:id, '-', ''))",
+          {'id': id},
+        );
+
+        // 3. Wallet chain (primary account only; sub-patients share it).
         await conn.execute(
           "DELETE wl FROM wallet_ledger wl "
           "INNER JOIN wallets w ON wl.wallet_id = w.wallet_id "
@@ -278,7 +290,7 @@ class PatientRepository {
           {'id': id},
         );
 
-        // 3. Sub-patients first (FK), then primary.
+        // 4. Sub-patients first (FK), then primary.
         await conn.execute(
           "DELETE FROM patients WHERE primary_account_id = UNHEX(REPLACE(:id, '-', ''))",
           {'id': id},
