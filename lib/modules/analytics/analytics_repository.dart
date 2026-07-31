@@ -233,8 +233,9 @@ class AnalyticsRepository {
   }) async {
     try {
       await _pool.execute(
-        'INSERT INTO audit_log (audit_id, user_id, action, target_type, target_id, details) '
+        'INSERT INTO audit_log (audit_id, user_id, actor_user_id, action, target_type, target_id, details) '
         "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:actorId, '-', '')), "
+        "UNHEX(REPLACE(:actorId, '-', '')), "
         ':action, :targetType, NULL, :details)',
         {
           'auditId': auditId,
