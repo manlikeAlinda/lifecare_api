@@ -142,7 +142,7 @@ class PatientRepository {
         await conn.execute(
           'INSERT INTO patients '
           '(patient_id, patient_code, full_name, phone_e164, phone_enc, '
-          ' national_id, national_id_enc, account_type, primary_account_id, relationship) '
+          ' national_id, nat_id_enc, account_type, primary_account_id, relationship) '
           "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
           ':phone, :phoneEnc, :nationalId, :nationalIdEnc, :accountType, '
           '$primaryIdExpr, :relationship)',
@@ -235,7 +235,7 @@ class PatientRepository {
     if (fields.containsKey('national_id')) {
       final enc = await _pii.encrypt(fields['national_id'] as String);
       if (enc != null) {
-        setClauseParts.add('national_id_enc = :nationalIdEnc');
+        setClauseParts.add('nat_id_enc = :nationalIdEnc');
         params['nationalIdEnc'] = enc;
       }
     }
@@ -258,7 +258,7 @@ class PatientRepository {
   /// _enc column, so a re-run (after interruption, or picking up rows
   /// created before PII_ENCRYPTION_KEY was set) never re-touches finished
   /// rows. Each row's UPDATE is separately guarded with `WHERE phone_enc IS
-  /// NULL` / `national_id_enc IS NULL` so this can safely race a concurrent
+  /// NULL` / `nat_id_enc IS NULL` so this can safely race a concurrent
   /// create()/update() without clobbering a fresher encryption.
   Future<Map<String, int>> backfillPiiEncryption({int limit = 200}) async {
     if (!_pii.ready) return {'processed': 0, 'remaining': 0};
@@ -266,10 +266,10 @@ class PatientRepository {
     final rows = await _pool.execute(
       'SELECT $_uuidId, phone_e164, national_id, '
       '(phone_enc IS NULL) AS phone_missing, '
-      '(national_id_enc IS NULL) AS national_id_missing '
+      '(nat_id_enc IS NULL) AS national_id_missing '
       'FROM patients '
       'WHERE (phone_enc IS NULL AND phone_e164 IS NOT NULL) '
-      '   OR (national_id_enc IS NULL AND national_id IS NOT NULL) '
+      '   OR (nat_id_enc IS NULL AND national_id IS NOT NULL) '
       'LIMIT :limit',
       {'limit': limit},
     );
@@ -297,8 +297,8 @@ class PatientRepository {
         final enc = await _pii.encrypt(nationalId);
         if (enc != null) {
           await _pool.execute(
-            "UPDATE patients SET national_id_enc = :enc "
-            "WHERE ${uuidWhere('patient_id', 'id')} AND national_id_enc IS NULL",
+            "UPDATE patients SET nat_id_enc = :enc "
+            "WHERE ${uuidWhere('patient_id', 'id')} AND nat_id_enc IS NULL",
             {'enc': enc, 'id': id},
           );
         }
@@ -309,7 +309,7 @@ class PatientRepository {
     final remainingResult = await _pool.execute(
       'SELECT COUNT(*) as total FROM patients '
       'WHERE (phone_enc IS NULL AND phone_e164 IS NOT NULL) '
-      '   OR (national_id_enc IS NULL AND national_id IS NOT NULL)',
+      '   OR (nat_id_enc IS NULL AND national_id IS NOT NULL)',
       {},
     );
     final remaining = int.parse(remainingResult.rows.first.assoc()['total'] ?? '0');
