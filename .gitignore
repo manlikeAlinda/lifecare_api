@@ -23,3 +23,8 @@ Thumbs.db
 
 # Compiled output
 bin/server
+
+# Real data exports — schema.sql (structure only) stays tracked, but any
+# dump containing actual rows must never be committed again.
+db/u524585165_lifecare*.sql
+db/*dump*.sql
