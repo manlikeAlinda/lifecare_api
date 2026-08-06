@@ -7,13 +7,15 @@ import 'package:lifecare_api/core/config/app_config.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 import 'package:lifecare_api/modules/auth/auth_service.dart';
+import 'package:lifecare_api/modules/patient_totp/patient_totp_service.dart';
 import 'patient_auth_repository.dart';
 
 class PatientAuthService {
   final PatientAuthRepository _repo;
   final AuthService _authService;
+  final PatientTotpService _totpService;
 
-  PatientAuthService(this._repo, this._authService);
+  PatientAuthService(this._repo, this._authService, this._totpService);
 
   /// Called from the first-login activation screen.
   /// Identity is already proved by the JWT — no PIN re-entry required.
@@ -96,6 +98,18 @@ class PatientAuthService {
       mustChangePw = credential['must_change_pw'] == true;
     }
 
+    // TOTP-enabled accounts don't get full tokens on password verification
+    // alone — issue a short-lived challenge instead; verify-login completes
+    // the session after the code checks out. last_login_at / audit log for
+    // the successful password check itself still happen here since that's
+    // a real, completed step regardless of the second factor.
+    if (credential['totp_enabled'] == true) {
+      await _repo.updateLastLogin(credentialId);
+      final challengeToken =
+          _authService.issueTotpChallengeToken(patientId: patientId);
+      return {'totp_required': true, 'challenge_token': challengeToken};
+    }
+
     await _repo.updateLastLogin(credentialId);
 
     final patient = await _repo.findPatientById(patientId);
@@ -122,6 +136,52 @@ class PatientAuthService {
       response['must_change_password'] = true;
     }
 
+    return response;
+  }
+
+  /// Completes a TOTP-gated login: verifies the challenge token issued by
+  /// login() plus the authenticator code, then issues real tokens exactly
+  /// like a normal successful login would.
+  Future<Map<String, dynamic>> verifyTotpLogin({
+    required String challengeToken,
+    required String code,
+  }) async {
+    final patientId = _authService.verifyTotpChallengeToken(challengeToken);
+
+    final credential = await _repo.findCredentialByPatientId(patientId);
+    if (credential == null) throw ApiError.notFound('Credentials not found');
+    if (credential['totp_enabled'] != true) {
+      // Account state changed between login() and this call (2FA disabled
+      // mid-flow) — the challenge is no longer meaningful.
+      throw ApiError.businessRule('Two-factor authentication is not enabled');
+    }
+
+    if (!await _totpService.verifyLoginCode(credential, code)) {
+      throw ApiError.forbidden('Invalid verification code');
+    }
+
+    final mustChangePw = credential['must_change_pw'] == true;
+    final phone = credential['phone_e164'] as String;
+    final patient = await _repo.findPatientById(patientId);
+    final patientCode = patient?['patient_code'] as String? ?? patientId;
+
+    final (accessToken, refreshToken, _) = await _createSession(
+      patientId: patientId,
+      phone: phone,
+      patientCode: patientCode,
+      mustChangePw: mustChangePw,
+    );
+
+    await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_LOGIN_TOTP');
+
+    final response = <String, dynamic>{
+      'access_token': accessToken,
+      'refresh_token': refreshToken,
+      'expires_in': AppConfig.jwtAccessExpiryMinutes * 60,
+      'patient_id': patientId,
+      'patient_code': patientCode,
+    };
+    if (mustChangePw) response['must_change_password'] = true;
     return response;
   }
 

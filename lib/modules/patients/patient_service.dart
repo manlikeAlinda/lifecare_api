@@ -180,6 +180,10 @@ class PatientService {
   ) =>
       createSubPatient(patientId, data, createdBy);
 
+  // ── PII encryption backfill (admin) ─────────────────────────────────────────
+
+  Future<Map<String, int>> backfillPiiEncryption() => _repo.backfillPiiEncryption();
+
   // ── Private ──────────────────────────────────────────────────────────────────
 
   Future<void> _ensurePatientExists(String patientId) async {

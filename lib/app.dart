@@ -33,6 +33,12 @@ import 'package:lifecare_api/modules/analytics/analytics_service.dart';
 import 'package:lifecare_api/modules/patient_auth/patient_auth_handler.dart';
 import 'package:lifecare_api/modules/patient_auth/patient_auth_repository.dart';
 import 'package:lifecare_api/modules/patient_auth/patient_auth_service.dart';
+import 'package:lifecare_api/modules/patient_totp/patient_totp_handler.dart';
+import 'package:lifecare_api/modules/patient_totp/patient_totp_service.dart';
+import 'package:lifecare_api/modules/kyc/kyc_handler.dart';
+import 'package:lifecare_api/modules/kyc/kyc_repository.dart';
+import 'package:lifecare_api/modules/kyc/kyc_service.dart';
+import 'package:lifecare_api/core/services/smile_identity_service.dart';
 import 'package:lifecare_api/modules/patient_credentials/patient_credentials_handler.dart';
 import 'package:lifecare_api/modules/patient_credentials/patient_credentials_repository.dart';
 import 'package:lifecare_api/modules/patient_credentials/patient_credentials_service.dart';
@@ -41,6 +47,10 @@ import 'package:lifecare_api/core/services/pesapal_service.dart';
 import 'package:lifecare_api/modules/deposits/deposit_handler.dart';
 import 'package:lifecare_api/modules/deposits/deposit_repository.dart';
 import 'package:lifecare_api/modules/deposits/deposit_service.dart';
+import 'package:lifecare_api/modules/checkout/checkout_handler.dart';
+import 'package:lifecare_api/modules/checkout/checkout_repository.dart';
+import 'package:lifecare_api/modules/checkout/checkout_service.dart';
+import 'package:lifecare_api/core/services/pii_encryption_service.dart';
 
 Handler buildApp() {
   final pool = Database.pool;
@@ -48,7 +58,8 @@ Handler buildApp() {
   // ── Repositories ────────────────────────────────────────────────────────────
   final authRepo = AuthRepository(pool);
   final userRepo = UserRepository(pool);
-  final patientRepo = PatientRepository(pool);
+  final piiEncryptionService = PiiEncryptionService();
+  final patientRepo = PatientRepository(pool, piiEncryptionService);
   final walletRepo = WalletRepository(pool);
   final encounterRepo = EncounterRepository(pool);
   final catalogRepo = CatalogRepository(pool);
@@ -56,6 +67,8 @@ Handler buildApp() {
   final patientAuthRepo = PatientAuthRepository(pool);
   final patientCredRepo = PatientCredentialsRepository(pool);
   final depositRepo = DepositRepository(pool);
+  final kycRepo = KycRepository(pool);
+  final checkoutRepo = CheckoutRepository(pool);
 
   // ── Services ────────────────────────────────────────────────────────────────
   final authService = AuthService(authRepo);
@@ -66,10 +79,15 @@ Handler buildApp() {
   final catalogService = CatalogService(catalogRepo);
   final analyticsService = AnalyticsService(analyticsRepo);
   final emailService = EmailService();
-  final patientAuthService = PatientAuthService(patientAuthRepo, authService);
+  final patientTotpService = PatientTotpService(patientAuthRepo);
+  final patientAuthService =
+      PatientAuthService(patientAuthRepo, authService, patientTotpService);
   final patientCredService = PatientCredentialsService(patientCredRepo, emailService);
   final pesapalService = PesapalService();
   final depositService = DepositService(depositRepo, walletRepo, pesapalService);
+  final smileIdentityService = SmileIdentityService();
+  final kycService = KycService(kycRepo, smileIdentityService);
+  final checkoutService = CheckoutService(checkoutRepo, walletRepo);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   final authHandler = AuthHandler(authService);
@@ -80,8 +98,11 @@ Handler buildApp() {
   final catalogHandler = CatalogHandler(catalogService);
   final analyticsHandler = AnalyticsHandler(analyticsService);
   final patientAuthHandler = PatientAuthHandler(patientAuthService);
+  final patientTotpHandler = PatientTotpHandler(patientTotpService);
   final patientCredHandler = PatientCredentialsHandler(patientCredService);
   final depositHandler = DepositHandler(depositService);
+  final kycHandler = KycHandler(kycService);
+  final checkoutHandler = CheckoutHandler(checkoutService);
 
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
@@ -452,6 +473,35 @@ Handler buildApp() {
         .addHandler(patientAuthHandler.changePassword),
   );
 
+  // ── Patient TOTP 2FA ──────────────────────────────────────────────────────────
+  // setup/enable/disable require a normal patient session. verify-login is
+  // pre-auth (called with a totp_challenge token, not a normal access
+  // token) — patientAuth2 would reject it, so it only gets rate limiting.
+  router.post(
+    '/v1/patient/auth/totp/setup',
+    Pipeline().addMiddleware(patientAuth2).addHandler(patientTotpHandler.setup),
+  );
+  router.post(
+    '/v1/patient/auth/totp/enable',
+    Pipeline()
+        .addMiddleware(patientAuth2)
+        .addMiddleware(rateLimitMiddleware(loginLimiter))
+        .addHandler(patientTotpHandler.enable),
+  );
+  router.post(
+    '/v1/patient/auth/totp/disable',
+    Pipeline()
+        .addMiddleware(patientAuth2)
+        .addMiddleware(rateLimitMiddleware(loginLimiter))
+        .addHandler(patientTotpHandler.disable),
+  );
+  router.post(
+    '/v1/patient/auth/totp/verify-login',
+    Pipeline()
+        .addMiddleware(rateLimitMiddleware(loginLimiter))
+        .addHandler(patientAuthHandler.verifyTotpLogin),
+  );
+
   // ── Patient Deposits (MTN MoMo + Card) ───────────────────────────────────────
   // /deposit must be before /deposit/<id> to avoid the wildcard catching it.
   router.post(
@@ -464,9 +514,32 @@ Handler buildApp() {
       (Request req) => depositHandler.getStatus(req, req.params['id']!),
     ),
   );
+  router.post(
+    '/v1/patient/deposit/<id>/reverse',
+    Pipeline().addMiddleware(patientAuth2).addHandler(
+      (Request req) => depositHandler.reverse(req, req.params['id']!),
+    ),
+  );
+
+  // ── Patient Checkout (wallet spend/debit) ──────────────────────────────────────
+  router.post(
+    '/v1/patient/checkout',
+    Pipeline().addMiddleware(patientAuth2).addHandler(checkoutHandler.checkout),
+  );
 
   // ── Payment Provider Webhooks (no auth — verified by payload/header) ──────────
   router.post('/v1/webhooks/pesapal', depositHandler.pesapalIpn);
+  router.post('/v1/kyc/webhook', kycHandler.webhook);
+
+  // ── Patient KYC ──────────────────────────────────────────────────────────────
+  router.post(
+    '/v1/patient/kyc/submit',
+    Pipeline().addMiddleware(patientAuth2).addHandler(kycHandler.submit),
+  );
+  router.get(
+    '/v1/patient/kyc/status',
+    Pipeline().addMiddleware(patientAuth2).addHandler(kycHandler.status),
+  );
 
   // ── Patient self-service endpoints ────────────────────────────────────────────
   router.get(
@@ -630,6 +703,12 @@ Handler buildApp() {
     adminOnly.addHandler(
       (Request req) => patientCredHandler.reinstate(req, req.params['patientId']!),
     ),
+  );
+
+  // ── Admin — PII encryption backfill ───────────────────────────────────────────
+  router.post(
+    '/v1/admin/patients/backfill-pii-encryption',
+    adminOnly.addHandler(patientHandler.backfillPiiEncryption),
   );
 
   // ── Analytics ─────────────────────────────────────────────────────────────────

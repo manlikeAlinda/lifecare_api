@@ -1,4 +1,6 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/audit/audit_writer.dart' as audit;
+import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 
@@ -145,5 +147,81 @@ class DepositRepository {
       credited = true;
     });
     return credited;
+  }
+
+  /// Reverses a SUCCESSFUL deposit: flips its status, debits the wallet by
+  /// the deposit amount (zero-floor guarded), and records a
+  /// 'deposit_reversal' ledger entry — atomically, so a crash mid-way can
+  /// never leave a REVERSED deposit with an uncredited-back wallet, or vice
+  /// versa. Idempotent: calling this twice on an already-reversed deposit
+  /// returns false the second time, not a double debit.
+  ///
+  /// Ledger type is 'deposit_reversal', not 'refund' — WalletRepository's
+  /// appendLedgerEntry treats 'refund' as a CREDIT type; a reversal is a
+  /// debit, so reusing that name would misclassify it for any future code
+  /// reading wallet_ledger.type to infer direction.
+  ///
+  /// Throws ApiError.businessRule if the wallet balance can't cover the
+  /// reversal — same convention as WalletRepository.appendLedgerEntry's
+  /// zero-floor guard — which rolls back the whole transaction, so the
+  /// deposit status flip above is undone and the deposit stays SUCCESSFUL
+  /// rather than being left half-reversed.
+  Future<bool> reverseDepositTransaction({
+    required String depositId,
+    required String walletId,
+    required String actorId,
+    required int amountShillings,
+    required String reason,
+  }) async {
+    var reversed = false;
+    await _pool.transactional((conn) async {
+      final update = await conn.execute(
+        "UPDATE deposits SET status = 'REVERSED', failure_reason = :reason "
+        "WHERE ${uuidWhere('deposit_id', 'id')} AND status = 'SUCCESSFUL'",
+        {'id': depositId, 'reason': reason},
+      );
+      if (update.affectedRows.toInt() == 0) {
+        return; // not SUCCESSFUL, or already reversed — nothing to do
+      }
+
+      final entryId = generateUuid();
+      await conn.execute(
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+        "VALUES (${uuidParam('entryId')}, ${uuidParam('walletId')}, "
+        "'deposit_reversal', :amount)",
+        {'entryId': entryId, 'walletId': walletId, 'amount': amountShillings},
+      );
+
+      // Zero-floor guarded debit — same pattern as appendLedgerEntry's debit
+      // branch. If the wallet has since been spent below the deposit
+      // amount, this blocks the reversal rather than driving balance negative.
+      final debit = await conn.execute(
+        'UPDATE wallets '
+        'SET balance_shillings = balance_shillings - :amount, '
+        '    last_activity_at = NOW() '
+        "WHERE ${uuidWhere('wallet_id', 'walletId')} "
+        'AND balance_shillings >= :amount',
+        {'amount': amountShillings, 'walletId': walletId},
+      );
+      if (debit.affectedRows.toInt() == 0) {
+        throw ApiError.businessRule('Insufficient wallet balance to reverse deposit');
+      }
+
+      await audit.writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'DEPOSIT_REVERSED',
+        targetType: 'deposit',
+        targetIdUuid: depositId,
+        after: {
+          'wallet_id': walletId,
+          'amount_shillings': amountShillings,
+          'reason': reason,
+        },
+      );
+
+      reversed = true;
+    });
+    return reversed;
   }
 }

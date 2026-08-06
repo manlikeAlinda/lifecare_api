@@ -13,12 +13,45 @@ class PatientAuthRepository {
       '${uuidSelect('credential_id')}, '
       '${uuidSelect('patient_id')}, '
       'phone_e164, password_hash, activation_pin, status, must_change_pw, '
+      'totp_secret, totp_enabled, '
       'created_at, updated_at, last_login_at '
       'FROM patient_credentials WHERE phone_e164 = :phone LIMIT 1',
       {'phone': phone},
     );
     if (result.rows.isEmpty) return null;
     return _rowToMap(result.rows.first);
+  }
+
+  // ── TOTP 2FA ────────────────────────────────────────────────────────────────
+
+  // Ciphertext is stored base64-encoded (ASCII-safe text), not raw bytes —
+  // mysql_client's ResultSetRow.assoc() returns every column as a Dart
+  // String, so arbitrary binary bytes cannot round-trip through it safely.
+  // Same convention as `password_hash` (bcrypt output, also ASCII).
+  Future<void> saveTotpSecret(String patientId, String encSecretBase64) async {
+    await _pool.execute(
+      'UPDATE patient_credentials '
+      'SET totp_secret = :secret, totp_enabled = 0 '
+      'WHERE ${uuidWhere('patient_id', 'patientId')}',
+      {'secret': encSecretBase64, 'patientId': patientId},
+    );
+  }
+
+  Future<void> setTotpEnabled(String patientId, bool enabled) async {
+    await _pool.execute(
+      'UPDATE patient_credentials SET totp_enabled = :enabled '
+      'WHERE ${uuidWhere('patient_id', 'patientId')}',
+      {'enabled': enabled ? 1 : 0, 'patientId': patientId},
+    );
+  }
+
+  Future<void> clearTotpSecret(String patientId) async {
+    await _pool.execute(
+      'UPDATE patient_credentials '
+      'SET totp_secret = NULL, totp_enabled = 0 '
+      'WHERE ${uuidWhere('patient_id', 'patientId')}',
+      {'patientId': patientId},
+    );
   }
 
   Future<void> activateCredential(
@@ -116,6 +149,7 @@ class PatientAuthRepository {
       '${uuidSelect('credential_id')}, '
       '${uuidSelect('patient_id')}, '
       'phone_e164, password_hash, activation_pin, status, must_change_pw, '
+      'totp_secret, totp_enabled, '
       'created_at, updated_at, last_login_at '
       'FROM patient_credentials WHERE ${uuidWhere('patient_id', 'patientId')} LIMIT 1',
       {'patientId': patientId},

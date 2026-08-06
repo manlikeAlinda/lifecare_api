@@ -84,4 +84,32 @@ class AppConfig {
     if (isProduction) return _required('PESAPAL_BASE_URL');
     return _env['PESAPAL_BASE_URL'] ?? 'https://cybqa.pesapal.com/pesapalv3';
   }
+
+  // ── TOTP 2FA (patient login) ─────────────────────────────────────────────
+  // Optional by design — 2FA can be off. Callers must check `totpConfigured`
+  // and degrade gracefully (reject setup with a clear error) rather than
+  // crash, matching the boot-must-not-fail contract for optional features.
+  static String get totpEncryptionKeyRaw => _env['TOTP_ENCRYPTION_KEY'] ?? '';
+  static bool get totpConfigured => totpEncryptionKeyRaw.length >= 32;
+
+  // ── PII field-level encryption (patients.phone_e164 / national_id) ────────
+  static String get piiEncryptionKeyRaw => _env['PII_ENCRYPTION_KEY'] ?? '';
+  static bool get piiConfigured => piiEncryptionKeyRaw.length >= 32;
+
+  // ── KYC (Smile Identity) ────────────────────────────────────────────────────
+  // Unset ⇒ KYC submissions are accepted and queued for manual review only;
+  // no automated verification call is made. See kyc_service.dart.
+  static String get smilePartnerId => _env['SMILE_PARTNER_ID'] ?? '';
+  static String get smileApiKey => _env['SMILE_API_KEY'] ?? '';
+  static bool get smileConfigured =>
+      smilePartnerId.isNotEmpty && smileApiKey.isNotEmpty;
+  static String get smileBaseUrl =>
+      _env['SMILE_BASE_URL'] ??
+      (isProduction
+          ? 'https://api.smileidentity.com/v1'
+          : 'https://testapi.smileidentity.com/v1');
+
+  // ── System actor (audit_log actor for webhook/provider-originated writes) ──
+  // Fixed UUID, must match the seeded row in migrations/026_system_actor.sql.
+  static const String systemActorId = '2f6554b5-a339-42cb-9011-de5e893aa112';
 }

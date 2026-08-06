@@ -1,12 +1,14 @@
 import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
+import 'package:lifecare_api/core/services/pii_encryption_service.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
 class PatientRepository {
   final MySQLConnectionPool _pool;
+  final PiiEncryptionService _pii;
 
-  PatientRepository(this._pool);
+  PatientRepository(this._pool, this._pii);
 
   // Live DB columns (migration 024 applied):
   //   patient_id, patient_code, full_name, phone_e164, national_id_hash,
@@ -123,6 +125,12 @@ class PatientRepository {
     String? primaryAccountId,
     String? relationship,
   }) async {
+    // Encrypted alongside plaintext (dual-write) — see PiiEncryptionService.
+    // Computed before the transaction since it's just crypto, no DB access.
+    final phoneEnc = phone != null ? await _pii.encrypt(phone) : null;
+    final nationalIdEnc =
+        nationalId != null ? await _pii.encrypt(nationalId) : null;
+
     // Patient + wallet are atomic; audit is best-effort outside the transaction.
     try {
       await _pool.transactional((conn) async {
@@ -133,17 +141,19 @@ class PatientRepository {
 
         await conn.execute(
           'INSERT INTO patients '
-          '(patient_id, patient_code, full_name, phone_e164, national_id, '
-          ' account_type, primary_account_id, relationship) '
+          '(patient_id, patient_code, full_name, phone_e164, phone_enc, '
+          ' national_id, national_id_enc, account_type, primary_account_id, relationship) '
           "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
-          ':phone, :nationalId, :accountType, '
+          ':phone, :phoneEnc, :nationalId, :nationalIdEnc, :accountType, '
           '$primaryIdExpr, :relationship)',
           {
             'id': id,
             'patientCode': patientCode,
             'fullName': fullName,
             'phone': phone,
+            'phoneEnc': phoneEnc,
             'nationalId': nationalId,
+            'nationalIdEnc': nationalIdEnc,
             'accountType': accountType,
             'relationship': relationship,
           },
@@ -207,18 +217,104 @@ class PatientRepository {
       'is_active',
       'relationship',
     ];
-    final setClauses =
-        fields.keys.where(allowed.contains).map((k) => '$k = :$k').join(', ');
-
-    if (setClauses.isEmpty) return findById(id);
+    final setClauseParts =
+        fields.keys.where(allowed.contains).map((k) => '$k = :$k').toList();
 
     final params = Map<String, dynamic>.from(fields)..['id'] = id;
+
+    // Re-encrypt alongside the plaintext write, matching create()'s
+    // dual-write — an update to phone_e164/national_id must not leave the
+    // _enc column stale.
+    if (fields.containsKey('phone_e164')) {
+      final enc = await _pii.encrypt(fields['phone_e164'] as String);
+      if (enc != null) {
+        setClauseParts.add('phone_enc = :phoneEnc');
+        params['phoneEnc'] = enc;
+      }
+    }
+    if (fields.containsKey('national_id')) {
+      final enc = await _pii.encrypt(fields['national_id'] as String);
+      if (enc != null) {
+        setClauseParts.add('national_id_enc = :nationalIdEnc');
+        params['nationalIdEnc'] = enc;
+      }
+    }
+
+    if (setClauseParts.isEmpty) return findById(id);
+
     await _pool.execute(
-      "UPDATE patients SET $setClauses WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
+      "UPDATE patients SET ${setClauseParts.join(', ')} "
+      "WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
       params,
     );
 
     return findById(id);
+  }
+
+  // ── PII encryption backfill (admin) ─────────────────────────────────────────
+
+  /// Encrypts a batch of rows still missing their _enc column(s). Naturally
+  /// idempotent — the WHERE clause only selects rows with at least one NULL
+  /// _enc column, so a re-run (after interruption, or picking up rows
+  /// created before PII_ENCRYPTION_KEY was set) never re-touches finished
+  /// rows. Each row's UPDATE is separately guarded with `WHERE phone_enc IS
+  /// NULL` / `national_id_enc IS NULL` so this can safely race a concurrent
+  /// create()/update() without clobbering a fresher encryption.
+  Future<Map<String, int>> backfillPiiEncryption({int limit = 200}) async {
+    if (!_pii.ready) return {'processed': 0, 'remaining': 0};
+
+    final rows = await _pool.execute(
+      'SELECT $_uuidId, phone_e164, national_id, '
+      '(phone_enc IS NULL) AS phone_missing, '
+      '(national_id_enc IS NULL) AS national_id_missing '
+      'FROM patients '
+      'WHERE (phone_enc IS NULL AND phone_e164 IS NOT NULL) '
+      '   OR (national_id_enc IS NULL AND national_id IS NOT NULL) '
+      'LIMIT :limit',
+      {'limit': limit},
+    );
+
+    var processed = 0;
+    for (final row in rows.rows) {
+      final r = row.assoc();
+      final id = r['id']!;
+      final phone = r['phone_e164'];
+      final nationalId = r['national_id'];
+      final phoneMissing = r['phone_missing'] == '1';
+      final nationalIdMissing = r['national_id_missing'] == '1';
+
+      if (phoneMissing && phone != null) {
+        final enc = await _pii.encrypt(phone);
+        if (enc != null) {
+          await _pool.execute(
+            "UPDATE patients SET phone_enc = :enc "
+            "WHERE ${uuidWhere('patient_id', 'id')} AND phone_enc IS NULL",
+            {'enc': enc, 'id': id},
+          );
+        }
+      }
+      if (nationalIdMissing && nationalId != null) {
+        final enc = await _pii.encrypt(nationalId);
+        if (enc != null) {
+          await _pool.execute(
+            "UPDATE patients SET national_id_enc = :enc "
+            "WHERE ${uuidWhere('patient_id', 'id')} AND national_id_enc IS NULL",
+            {'enc': enc, 'id': id},
+          );
+        }
+      }
+      processed++;
+    }
+
+    final remainingResult = await _pool.execute(
+      'SELECT COUNT(*) as total FROM patients '
+      'WHERE (phone_enc IS NULL AND phone_e164 IS NOT NULL) '
+      '   OR (national_id_enc IS NULL AND national_id IS NOT NULL)',
+      {},
+    );
+    final remaining = int.parse(remainingResult.rows.first.assoc()['total'] ?? '0');
+
+    return {'processed': processed, 'remaining': remaining};
   }
 
   /// Hard-deletes a patient and ALL related records.

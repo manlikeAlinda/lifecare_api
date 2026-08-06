@@ -45,6 +45,24 @@ class DepositHandler {
     return okResponse(deposit);
   }
 
+  // ── POST /v1/patient/deposit/<id>/reverse ─────────────────────────────────────
+
+  Future<Response> reverse(Request request, String depositId) async {
+    final patient = requirePatientUser(request);
+    final body    = await parseJsonBody(request);
+
+    Validator(body)
+      ..required('reason')
+      ..throwIfInvalid();
+
+    final result = await _service.reverseDeposit(
+      depositId: depositId,
+      patientId: patient.id,
+      reason:    body['reason'] as String,
+    );
+    return okResponse(result);
+  }
+
   // ── POST /v1/webhooks/pesapal ─────────────────────────────────────────────────
 
   Future<Response> pesapalIpn(Request request) async {

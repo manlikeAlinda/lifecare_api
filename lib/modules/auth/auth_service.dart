@@ -214,6 +214,44 @@ class AuthService {
     );
   }
 
+  /// Short-lived, single-purpose JWT proving "this caller just passed
+  /// password verification for this patient" — issued instead of full
+  /// tokens when the account has TOTP 2FA enabled. Deliberately uses
+  /// `sub_type: 'totp_challenge'` (not `'patient'`) so `patientAuthMiddleware`
+  /// rejects it on every normal route — it is only ever accepted by
+  /// PatientAuthService.verifyTotpLogin.
+  String issueTotpChallengeToken({required String patientId}) {
+    final jwt = JWT({
+      'sub': patientId,
+      'sub_type': 'totp_challenge',
+      'type': 'totp_challenge',
+      'iat': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    });
+    return jwt.sign(
+      SecretKey(AppConfig.jwtSecret),
+      expiresIn: const Duration(minutes: 5),
+    );
+  }
+
+  /// Verifies a challenge token issued by [issueTotpChallengeToken].
+  /// Returns the patient ID on success; throws ApiError otherwise.
+  String verifyTotpChallengeToken(String token) {
+    late final JWT jwt;
+    try {
+      jwt = JWT.verify(token, SecretKey(AppConfig.jwtSecret));
+    } on JWTExpiredException {
+      throw ApiError.unauthenticated('Challenge has expired, please log in again');
+    } on JWTException {
+      throw ApiError.unauthenticated('Invalid challenge token');
+    }
+    final payload = jwt.payload as Map<String, dynamic>;
+    if (payload['type'] != 'totp_challenge' ||
+        payload['sub_type'] != 'totp_challenge') {
+      throw ApiError.unauthenticated('Invalid challenge token');
+    }
+    return payload['sub'] as String;
+  }
+
   String _hashToken(String token) =>
       sha256.convert(utf8.encode(token)).toString();
 }

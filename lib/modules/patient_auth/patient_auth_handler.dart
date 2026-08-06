@@ -70,6 +70,24 @@ class PatientAuthHandler {
     return okResponse(result);
   }
 
+  Future<Response> verifyTotpLogin(Request request) async {
+    final body = await parseJsonBody(request);
+
+    Validator(body)
+      ..required('challenge_token')
+      ..required('code')
+      ..minLength('code', 6)
+      ..maxLength('code', 6)
+      ..throwIfInvalid();
+
+    final result = await _service.verifyTotpLogin(
+      challengeToken: body['challenge_token'] as String,
+      code: body['code'] as String,
+    );
+
+    return okResponse(result);
+  }
+
   Future<Response> refresh(Request request) async {
     final body = await parseJsonBody(request);
 

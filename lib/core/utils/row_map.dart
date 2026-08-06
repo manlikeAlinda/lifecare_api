@@ -22,6 +22,7 @@ Map<String, dynamic> rowToMap(ResultSetRow row) {
     'is_lifecare_eligible',
     'is_consultation',
     'must_change_pw',
+    'totp_enabled',
   };
 
   // ── Numeric columns (int, bigint, decimal, or computed aggregates) ─────────

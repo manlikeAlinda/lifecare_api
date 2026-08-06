@@ -143,6 +143,36 @@ class DepositService {
     }
   }
 
+  // ── Reverse a successful deposit ──────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> reverseDeposit({
+    required String depositId,
+    required String patientId,
+    required String reason,
+  }) async {
+    final deposit = await _depositRepo.findById(depositId);
+    if (deposit == null) throw ApiError.notFound('Deposit not found');
+    if (deposit['patient_id'] != patientId) throw ApiError.forbidden();
+    if (deposit['status'] != 'SUCCESSFUL') {
+      throw ApiError.businessRule('Only a successful deposit can be reversed');
+    }
+
+    final reversed = await _depositRepo.reverseDepositTransaction(
+      depositId: depositId,
+      walletId: deposit['wallet_id'] as String,
+      actorId: patientId,
+      amountShillings: deposit['amount_shillings'] as int,
+      reason: reason,
+    );
+
+    if (!reversed) {
+      throw ApiError.conflict('Deposit was already reversed');
+    }
+
+    log.info('Deposit reversed: deposit=$depositId patient=$patientId');
+    return (await _depositRepo.findById(depositId))!;
+  }
+
   // ── Private helpers ───────────────────────────────────────────────────────────
 
   Future<void> _creditWallet(Map<String, dynamic> deposit) async {

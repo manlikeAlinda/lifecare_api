@@ -105,6 +105,13 @@ class PatientHandler {
     return noContentResponse();
   }
 
+  // ── PII encryption backfill (admin) ─────────────────────────────────────────
+
+  Future<Response> backfillPiiEncryption(Request request) async {
+    final result = await _service.backfillPiiEncryption();
+    return okResponse(result);
+  }
+
   // ── Dependents ──────────────────────────────────────────────────────────────
 
   Future<Response> listDependents(Request request, String patientId) async {
