@@ -641,36 +641,24 @@ Handler buildApp() {
     }),
   );
 
+  // /v1/patient/beneficiaries reads/writes the current patients.primary_account_id
+  // sub-account model via PatientHandler — NOT the legacy `dependents` table
+  // (which findDependentsByWalletId queries and which the write paths below
+  // never touch, so using it here would silently desync from what create/delete
+  // actually persist).
   router.get(
     '/v1/patient/beneficiaries',
-    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
-      final patientUser = requirePatientUser(req);
-
-      final wallet = await walletRepo.findByPatientId(patientUser.id);
-      if (wallet == null) {
-        return Response.ok(
-          jsonEncode({'data': []}),
-          headers: {'content-type': 'application/json'},
-        );
-      }
-
-      final dependents = await walletRepo.findDependentsByWalletId(wallet['id'] as String);
-      final beneficiaries = dependents.map((d) => {
-        'id':           d['id'] ?? '',
-        'name':         d['full_name'] ?? '',
-        'relationship': d['relationship'] ?? '',
-        'nationalId':   d['national_id'] ?? '',
-        'phone':        d['phone_number'] ?? '',
-        'email':        '',
-        'status':       (d['is_active'] == true || d['is_active'] == 1) ? 'active' : 'inactive',
-        'addedOn':      d['created_at']?.toString() ?? '',
-      }).toList();
-
-      return Response.ok(
-        jsonEncode({'data': beneficiaries}),
-        headers: {'content-type': 'application/json'},
-      );
-    }),
+    Pipeline().addMiddleware(patientAuth2).addHandler(patientHandler.listBeneficiaries),
+  );
+  router.post(
+    '/v1/patient/beneficiaries',
+    Pipeline().addMiddleware(patientAuth2).addHandler(patientHandler.createBeneficiary),
+  );
+  router.post(
+    '/v1/patient/beneficiaries/<id>/delete',
+    Pipeline().addMiddleware(patientAuth2).addHandler(
+      (Request req) => patientHandler.deleteBeneficiary(req, req.params['id']!),
+    ),
   );
 
   // ── Admin — Patient Credential Management ─────────────────────────────────────

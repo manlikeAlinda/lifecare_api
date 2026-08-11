@@ -168,6 +168,57 @@ class PatientService {
     await _repo.softDeleteSubPatient(subPatientId);
   }
 
+  // ── Patient self-service beneficiaries (mobile app) ─────────────────────────
+  //
+  // Only the primary account holder (primary_account_id IS NULL) may manage
+  // beneficiaries — a beneficiary calling these would otherwise be able to
+  // add/remove siblings under an account they don't own. Reuses the same
+  // sub-patient repo methods the staff-facing desktop routes already use.
+
+  Future<List<Map<String, dynamic>>> listOwnBeneficiaries(
+    String requestingPatientId,
+  ) async {
+    final primaryAccountId = await _resolvePrimaryAccountId(requestingPatientId);
+    return _repo.findSubPatients(primaryAccountId);
+  }
+
+  Future<Map<String, dynamic>> createOwnBeneficiary(
+    String requestingPatientId,
+    Map<String, dynamic> data,
+  ) async {
+    final requester = await _repo.findById(requestingPatientId);
+    if (requester == null) throw ApiError.notFound('Patient not found');
+    if (requester['primary_account_id'] != null) {
+      throw ApiError.forbidden('Only the primary account holder can manage beneficiaries');
+    }
+    return createSubPatient(requestingPatientId, data, requestingPatientId);
+  }
+
+  Future<void> deleteOwnBeneficiary(
+    String requestingPatientId,
+    String beneficiaryId,
+  ) async {
+    final requester = await _repo.findById(requestingPatientId);
+    if (requester == null) throw ApiError.notFound('Patient not found');
+    if (requester['primary_account_id'] != null) {
+      throw ApiError.forbidden('Only the primary account holder can manage beneficiaries');
+    }
+
+    final beneficiary = await _repo.findById(beneficiaryId);
+    if (beneficiary == null) throw ApiError.notFound('Beneficiary not found');
+    if (beneficiary['primary_account_id'] != requestingPatientId) {
+      throw ApiError.forbidden();
+    }
+
+    await _repo.softDeleteSubPatient(beneficiaryId);
+  }
+
+  Future<String> _resolvePrimaryAccountId(String patientId) async {
+    final patient = await _repo.findById(patientId);
+    if (patient == null) throw ApiError.notFound('Patient not found');
+    return patient['primary_account_id'] as String? ?? patientId;
+  }
+
   // ── Legacy aliases (kept so old dependents routes still work) ───────────────
 
   Future<List<Map<String, dynamic>>> listDependents(String patientId) =>

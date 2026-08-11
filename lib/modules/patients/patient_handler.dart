@@ -112,6 +112,56 @@ class PatientHandler {
     return okResponse(result);
   }
 
+  // ── Beneficiaries (patient self-service, mobile app) ────────────────────────
+  //
+  // Response shape here is intentionally distinct from the staff-facing
+  // `list`/`getById` shape — it matches what mobile/lib/features/profile/
+  // beneficiaries_screen.dart's Beneficiary.fromJson expects.
+
+  Map<String, dynamic> _toBeneficiaryJson(Map<String, dynamic> p) => {
+        'id': p['id'] ?? '',
+        'name': p['full_name'] ?? '',
+        'relationship': p['relationship'] ?? '',
+        'nationalId': p['national_id'] ?? '',
+        'phone': p['phone_e164'] ?? '',
+        'email': '',
+        'status': (p['is_active'] == true || p['is_active'] == 1) ? 'active' : 'inactive',
+        'addedOn': p['created_at']?.toString() ?? '',
+      };
+
+  Future<Response> listBeneficiaries(Request request) async {
+    final patient = requirePatientUser(request);
+    final list = await _service.listOwnBeneficiaries(patient.id);
+    return okListResponse(
+      list.map(_toBeneficiaryJson).toList(),
+      total: list.length,
+    );
+  }
+
+  Future<Response> createBeneficiary(Request request) async {
+    final patient = requirePatientUser(request);
+    final body = await parseJsonBody(request);
+
+    Validator(body)
+      ..required('name')
+      ..required('relationship')
+      ..throwIfInvalid();
+
+    final beneficiary = await _service.createOwnBeneficiary(patient.id, {
+      'full_name': body['name'],
+      'relationship': body['relationship'],
+      'national_id': body['nationalId'],
+      'phone': body['phone'],
+    });
+    return createdResponse(_toBeneficiaryJson(beneficiary));
+  }
+
+  Future<Response> deleteBeneficiary(Request request, String beneficiaryId) async {
+    final patient = requirePatientUser(request);
+    await _service.deleteOwnBeneficiary(patient.id, beneficiaryId);
+    return noContentResponse();
+  }
+
   // ── Dependents ──────────────────────────────────────────────────────────────
 
   Future<Response> listDependents(Request request, String patientId) async {
