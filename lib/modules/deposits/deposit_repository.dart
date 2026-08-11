@@ -114,6 +114,7 @@ class DepositRepository {
   Future<bool> creditDepositTransaction({
     required String depositId,
     required String walletId,
+    required String patientId,
     required double amountShillings,
   }) async {
     bool credited = false;
@@ -129,11 +130,12 @@ class DepositRepository {
       final amountInt = amountShillings.round();
 
       await conn.execute(
-        'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, amount_shillings) '
         "VALUES (UNHEX(REPLACE(:entryId, '-', '')), "
         "UNHEX(REPLACE(:walletId, '-', '')), "
+        "UNHEX(REPLACE(:patientId, '-', '')), "
         "'deposit', :amount)",
-        {'entryId': entryId, 'walletId': walletId, 'amount': amountInt},
+        {'entryId': entryId, 'walletId': walletId, 'patientId': patientId, 'amount': amountInt},
       );
 
       await conn.execute(
@@ -186,10 +188,10 @@ class DepositRepository {
 
       final entryId = generateUuid();
       await conn.execute(
-        'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, amount_shillings) '
         "VALUES (${uuidParam('entryId')}, ${uuidParam('walletId')}, "
-        "'deposit_reversal', :amount)",
-        {'entryId': entryId, 'walletId': walletId, 'amount': amountShillings},
+        "${uuidParam('actorId')}, 'deposit_reversal', :amount)",
+        {'entryId': entryId, 'walletId': walletId, 'actorId': actorId, 'amount': amountShillings},
       );
 
       // Zero-floor guarded debit — same pattern as appendLedgerEntry's debit

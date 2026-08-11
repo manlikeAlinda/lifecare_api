@@ -32,6 +32,8 @@ class EncounterRepository {
     int limit = 20,
     int offset = 0,
     String? patientId,
+    String? dependentId,
+    bool excludeDependents = false,
     String? status,
     String? dateFrom,
     String? dateTo,
@@ -40,9 +42,22 @@ class EncounterRepository {
     final conditions = <String>[];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
 
-    if (patientId != null) {
+    // dependentId scopes to visits recorded FOR that specific beneficiary
+    // (e.dependent_id) — used for a beneficiary's own private visit view.
+    // patientId alone matches the staff/primary-holder default: every visit
+    // on the family account, including beneficiaries' (since those rows
+    // still carry the primary's patient_id, just with dependent_id set).
+    // excludeDependents narrows that to the primary's own visits only, for
+    // the primary's private view (symmetric with a beneficiary's).
+    if (dependentId != null) {
+      conditions.add("e.dependent_id = UNHEX(REPLACE(:dependentId, '-', ''))");
+      params['dependentId'] = dependentId;
+    } else if (patientId != null) {
       conditions.add("e.patient_id = UNHEX(REPLACE(:patientId, '-', ''))");
       params['patientId'] = patientId;
+      if (excludeDependents) {
+        conditions.add('e.dependent_id IS NULL');
+      }
     }
     if (status != null) {
       conditions.add('e.status = :status');

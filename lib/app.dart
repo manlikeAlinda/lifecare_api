@@ -84,7 +84,7 @@ Handler buildApp() {
       PatientAuthService(patientAuthRepo, authService, patientTotpService);
   final patientCredService = PatientCredentialsService(patientCredRepo, emailService);
   final pesapalService = PesapalService();
-  final depositService = DepositService(depositRepo, walletRepo, pesapalService);
+  final depositService = DepositService(depositRepo, walletRepo, patientRepo, pesapalService);
   final smileIdentityService = SmileIdentityService();
   final kycService = KycService(kycRepo, smileIdentityService);
   final checkoutService = CheckoutService(checkoutRepo, walletRepo);
@@ -569,8 +569,16 @@ Handler buildApp() {
       final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
       final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
 
+      // Visits are private per-patient: a beneficiary sees only visits
+      // recorded for them, and the primary holder sees only their own —
+      // neither sees the other's, symmetrically.
+      final requester = await patientRepo.findById(patientUser.id);
+      final isBeneficiary = requester?['primary_account_id'] != null;
+
       final (encounters, total) = await encounterService.listEncounters(
-        patientId: patientUser.id,
+        patientId: isBeneficiary ? null : patientUser.id,
+        dependentId: isBeneficiary ? patientUser.id : null,
+        excludeDependents: !isBeneficiary,
         limit: limit,
         offset: offset,
         dateFrom: qp['dateFrom'],
@@ -618,8 +626,18 @@ Handler buildApp() {
         );
       }
 
-      final (entries, total) =
-          await walletRepo.getLedger(wallet['id'] as String, limit: limit, offset: offset);
+      // A beneficiary sees only transactions they personally initiated
+      // (their own checkouts); the primary holder keeps the full,
+      // unfiltered shared-wallet history.
+      final requester = await patientRepo.findById(patientUser.id);
+      final isBeneficiary = requester?['primary_account_id'] != null;
+
+      final (entries, total) = await walletRepo.getLedger(
+        wallet['id'] as String,
+        limit: limit,
+        offset: offset,
+        initiatedByFilter: isBeneficiary ? patientUser.id : null,
+      );
 
       final transactions = entries.map((e) {
         final type = (e['type'] as String? ?? '').toLowerCase();

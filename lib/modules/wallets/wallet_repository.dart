@@ -61,24 +61,24 @@ class WalletRepository {
     return _rowToMap(result.rows.first);
   }
 
-  /// Resolves the wallet for a patient id, including dependents/sub-account
-  /// rows where the wallet is keyed by patient_id rather than
-  /// primary_patient_id (migration 021 sub-account model). Uses the same
-  /// COALESCE the SELECT list already applies, then asserts the resolved
-  /// wallet actually belongs to the requested id before returning it —
-  /// this can never legitimately mismatch, but guards against ever handing
-  /// back another patient's wallet if that assumption turns out to be wrong.
+  /// Resolves the wallet for a patient id. A beneficiary has no wallet row
+  /// of their own (createSubPatient always passes walletId: null — they
+  /// share the primary account's wallet), so the lookup first resolves the
+  /// requesting patient's effective owner via patients.primary_account_id
+  /// (falling back to their own id when they ARE the primary), then matches
+  /// that against the wallet's owner columns.
   Future<Map<String, dynamic>?> findByPatientId(String patientId) async {
     final result = await _pool.execute(
       '$_walletSelect '
-      "WHERE COALESCE(primary_patient_id, patient_id) = UNHEX(REPLACE(:patientId, '-', '')) "
+      "WHERE COALESCE(primary_patient_id, patient_id) = COALESCE("
+      "  (SELECT primary_account_id FROM patients WHERE patient_id = UNHEX(REPLACE(:patientId, '-', ''))), "
+      "  UNHEX(REPLACE(:patientId, '-', ''))"
+      ') '
       'LIMIT 1',
       {'patientId': patientId},
     );
     if (result.rows.isEmpty) return null;
-    final wallet = _rowToMap(result.rows.first);
-    if (wallet['patient_id'] != patientId.toLowerCase()) return null;
-    return wallet;
+    return _rowToMap(result.rows.first);
   }
 
   // ── Ledger ────────────────────────────────────────────────────────────────
@@ -91,6 +91,9 @@ class WalletRepository {
       "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
       "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
       "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
+      "LOWER(CONCAT(SUBSTR(HEX(initiated_by),1,8),'-',SUBSTR(HEX(initiated_by),9,4),'-',"
+      "SUBSTR(HEX(initiated_by),13,4),'-',SUBSTR(HEX(initiated_by),17,4),'-',"
+      "SUBSTR(HEX(initiated_by),21))) AS initiated_by, "
       'type, amount_shillings, status, failure_reason, created_at '
       'FROM wallet_ledger';
 
@@ -131,23 +134,32 @@ class WalletRepository {
     return (result.rows.map(_rowToMap).toList(), total);
   }
 
+  /// [initiatedByFilter], when set, restricts results to entries attributed
+  /// to that patient — used to scope a beneficiary's transaction view to
+  /// only what they personally initiated. Omit it for the primary account
+  /// holder's unfiltered, full-wallet view.
   Future<(List<Map<String, dynamic>>, int)> getLedger(
     String walletId, {
     int limit = 20,
     int offset = 0,
+    String? initiatedByFilter,
   }) async {
+    final where = "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
+        "${initiatedByFilter != null ? "AND initiated_by = UNHEX(REPLACE(:initiatedBy, '-', ''))" : ''}";
+    final params = <String, dynamic>{
+      'walletId': walletId,
+      if (initiatedByFilter != null) 'initiatedBy': initiatedByFilter,
+    };
+
     final countResult = await _pool.execute(
-      "SELECT COUNT(*) as total FROM wallet_ledger "
-      "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', ''))",
-      {'walletId': walletId},
+      'SELECT COUNT(*) as total FROM wallet_ledger $where',
+      params,
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      '$_ledgerSelect '
-      "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
-      'ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
-      {'walletId': walletId, 'limit': limit, 'offset': offset},
+      '$_ledgerSelect $where ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+      {...params, 'limit': limit, 'offset': offset},
     );
     return (result.rows.map(_rowToMap).toList(), total);
   }
@@ -161,6 +173,7 @@ class WalletRepository {
     required String walletId,
     required String transactionType,
     required double amount,
+    String? initiatedBy,
   }) async {
     final amountInt = amount.round();
     // Signed delta: positive types add, negative types subtract.
@@ -169,13 +182,15 @@ class WalletRepository {
     final delta = isCredit ? amountInt : -amountInt;
 
     await conn.execute(
-      'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+      'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, amount_shillings) '
       "VALUES (UNHEX(REPLACE(:entryId, '-', '')), "
       "UNHEX(REPLACE(:walletId, '-', '')), "
+      "${initiatedBy != null ? "UNHEX(REPLACE(:initiatedBy, '-', ''))" : 'NULL'}, "
       ':type, :amount)',
       {
         'entryId': entryId,
         'walletId': walletId,
+        if (initiatedBy != null) 'initiatedBy': initiatedBy,
         'type': transactionType,
         'amount': amountInt,
       },

@@ -103,10 +103,10 @@ class CheckoutRepository {
 
       final entryId = generateUuid();
       await conn.execute(
-        'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, amount_shillings) '
         "VALUES (${uuidParam('entryId')}, ${uuidParam('walletId')}, "
-        "'deduction', :amount)",
-        {'entryId': entryId, 'walletId': walletId, 'amount': amountShillings},
+        "${uuidParam('patientId')}, 'deduction', :amount)",
+        {'entryId': entryId, 'walletId': walletId, 'patientId': patientId, 'amount': amountShillings},
       );
 
       await conn.execute(

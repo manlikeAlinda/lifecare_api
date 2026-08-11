@@ -4,6 +4,7 @@ import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/logging/logger.dart';
 import 'package:lifecare_api/core/services/pesapal_service.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
+import 'package:lifecare_api/modules/patients/patient_repository.dart';
 import 'package:lifecare_api/modules/wallets/wallet_repository.dart';
 import 'deposit_repository.dart';
 
@@ -13,9 +14,10 @@ const _maxDepositShillings = 5000000; // 5 M UGX
 class DepositService {
   final DepositRepository _depositRepo;
   final WalletRepository _walletRepo;
+  final PatientRepository _patientRepo;
   final PesapalService _pesapal;
 
-  DepositService(this._depositRepo, this._walletRepo, this._pesapal);
+  DepositService(this._depositRepo, this._walletRepo, this._patientRepo, this._pesapal);
 
   // ── Initiate deposit ──────────────────────────────────────────────────────────
 
@@ -26,6 +28,14 @@ class DepositService {
     String? customerPhone,
   }) async {
     _validateAmount(amountShillings);
+
+    // Only the primary account holder deposits — beneficiaries can spend
+    // (checkout) against the shared wallet but not top it up.
+    final patient = await _patientRepo.findById(patientId);
+    if (patient == null) throw ApiError.notFound('Patient not found');
+    if (patient['primary_account_id'] != null) {
+      throw ApiError.forbidden('Only the primary account holder can deposit');
+    }
 
     final wallet = await _walletRepo.findByPatientId(patientId);
     if (wallet == null) throw ApiError.notFound('Wallet not found for this patient');
@@ -178,6 +188,7 @@ class DepositService {
   Future<void> _creditWallet(Map<String, dynamic> deposit) async {
     final depositId = deposit['id'] as String;
     final walletId = deposit['wallet_id'] as String;
+    final patientId = deposit['patient_id'] as String;
     final amountShillings = (deposit['amount_shillings'] as int).toDouble();
 
     // Atomic: markSuccessful + wallet ledger entry in one transaction so a
@@ -186,6 +197,7 @@ class DepositService {
     final credited = await _depositRepo.creditDepositTransaction(
       depositId: depositId,
       walletId: walletId,
+      patientId: patientId,
       amountShillings: amountShillings,
     );
 
