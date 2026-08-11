@@ -31,11 +31,21 @@ Future<void> writeAudit({
     if (after != null) 'after': after,
   });
 
+  // action_type, entity_type, request_id are legacy columns from an earlier
+  // schema revision — still NOT NULL with no default on the real table
+  // (unlike db/schema.sql, which doesn't have them at all). Omitting them
+  // throws under strict mode, silently rolling back whatever transaction
+  // this write is part of. action/target_type duplicate into action_type/
+  // entity_type rather than leaving them blank; request_id has no value
+  // available this deep in the call stack, so it's left empty — matches
+  // the convention already present in existing rows.
   await conn.execute(
     'INSERT INTO audit_log '
-    '(audit_id, user_id, actor_user_id, action, target_type, target_id, details) '
+    '(audit_id, user_id, actor_user_id, action_type, entity_type, request_id, '
+    ' action, target_type, target_id, details) '
     "VALUES (UNHEX(REPLACE(:auditId, '-', '')), UNHEX(REPLACE(:actorId, '-', '')), "
     "UNHEX(REPLACE(:actorId, '-', '')), "
+    ':action, :targetType, \'\', '
     ':action, :targetType, '
     "${targetIdUuid != null ? "UNHEX(REPLACE(:targetIdUuid, '-', ''))" : 'NULL'}, "
     ':details)',
