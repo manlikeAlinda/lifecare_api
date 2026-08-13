@@ -251,13 +251,16 @@ class WalletRepository {
         amount: amount,
       );
 
-      // Audit log.
+      // Audit log. action_type/entity_type/request_id are legacy NOT NULL
+      // columns with no default on the real table — see writeAudit's comment.
       await conn.execute(
         'INSERT INTO audit_log '
-        '(audit_id, user_id, actor_user_id, action, target_type, target_id, details) '
+        '(audit_id, user_id, actor_user_id, action_type, entity_type, request_id, '
+        ' action, target_type, target_id, details) '
         "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
         "UNHEX(REPLACE(:actorId, '-', '')), "
         "UNHEX(REPLACE(:actorId, '-', '')), "
+        ':action, :targetType, \'\', '
         ':action, :targetType, '
         "UNHEX(REPLACE(:targetId, '-', '')), '{}')",
         {

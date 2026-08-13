@@ -177,10 +177,13 @@ class PatientAuthRepository {
   }) async {
     try {
       // For patient self-service actions, the actor IS the patient.
+      // action_type/entity_type/request_id are legacy NOT NULL columns with
+      // no default on the real table — see writeAudit's comment.
       await _pool.execute(
         'INSERT INTO audit_log '
-        '(audit_id, user_id, action, target_type, target_id, details) '
-        'VALUES (${uuidParam('auditId')}, ${uuidParam('patientId')}, '
+        '(audit_id, user_id, actor_user_id, action_type, entity_type, request_id, action, target_type, target_id, details) '
+        'VALUES (${uuidParam('auditId')}, ${uuidParam('patientId')}, ${uuidParam('patientId')}, '
+        ':action, :targetType, \'\', '
         ':action, :targetType, ${uuidParam('targetId')}, \'{}\')',
         {
           'auditId': generateUuid(),
