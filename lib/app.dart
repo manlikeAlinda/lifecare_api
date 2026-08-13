@@ -51,6 +51,9 @@ import 'package:lifecare_api/modules/checkout/checkout_handler.dart';
 import 'package:lifecare_api/modules/checkout/checkout_repository.dart';
 import 'package:lifecare_api/modules/checkout/checkout_service.dart';
 import 'package:lifecare_api/core/services/pii_encryption_service.dart';
+import 'package:lifecare_api/modules/ads/ad_handler.dart';
+import 'package:lifecare_api/modules/ads/ad_repository.dart';
+import 'package:lifecare_api/modules/ads/ad_service.dart';
 
 Handler buildApp() {
   final pool = Database.pool;
@@ -69,6 +72,7 @@ Handler buildApp() {
   final depositRepo = DepositRepository(pool);
   final kycRepo = KycRepository(pool);
   final checkoutRepo = CheckoutRepository(pool);
+  final adRepo = AdRepository(pool);
 
   // ── Services ────────────────────────────────────────────────────────────────
   final authService = AuthService(authRepo);
@@ -88,6 +92,7 @@ Handler buildApp() {
   final smileIdentityService = SmileIdentityService();
   final kycService = KycService(kycRepo, smileIdentityService);
   final checkoutService = CheckoutService(checkoutRepo, walletRepo);
+  final adService = AdService(adRepo);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   final authHandler = AuthHandler(authService);
@@ -103,6 +108,7 @@ Handler buildApp() {
   final depositHandler = DepositHandler(depositService);
   final kycHandler = KycHandler(kycService);
   final checkoutHandler = CheckoutHandler(checkoutService);
+  final adHandler = AdHandler(adService);
 
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
@@ -436,6 +442,38 @@ Handler buildApp() {
       (Request req) => catalogHandler.getById(req, req.params['id']!),
     ),
   );
+  // ── Ads (carousel content) ──────────────────────────────────────────────────
+  // Admin-only, matching catalog's write-ops posture — this is content
+  // management, not a day-to-day staff task.
+  router.get('/v1/admin/ads', adminOnly.addHandler(adHandler.list));
+  router.post('/v1/admin/ads', adminOnly.addHandler(adHandler.create));
+  router.get(
+    '/v1/admin/ads/<id>',
+    adminOnly.addHandler(
+      (Request req) => adHandler.getById(req, req.params['id']!),
+    ),
+  );
+  router.put(
+    '/v1/admin/ads/<id>',
+    adminOnly.addHandler(
+      (Request req) => adHandler.update(req, req.params['id']!),
+    ),
+  );
+  router.delete(
+    '/v1/admin/ads/<id>',
+    adminOnly.addHandler(
+      (Request req) => adHandler.archive(req, req.params['id']!),
+    ),
+  );
+  router.delete(
+    '/v1/admin/ads/<id>/hard',
+    adminOnly.addHandler(
+      (Request req) => adHandler.hardDelete(req, req.params['id']!),
+    ),
+  );
+  // Public — no auth. Mobile carousel reads this directly.
+  router.get('/v1/ads', adHandler.listPublic);
+
   // Alias routes — app uses these shorter paths
   router.get('/v1/services', patientAuth.addHandler(catalogHandler.listServices));
   router.get('/v1/drugs', patientAuth.addHandler(catalogHandler.listDrugs));

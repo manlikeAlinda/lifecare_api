@@ -54,6 +54,8 @@ Map<String, dynamic> rowToMap(ResultSetRow row) {
     'active_patients',
     'open_encounters',
     'total_encounters',
+    // ads
+    'display_order',
   };
 
   for (final key in map.keys.toList()) {
