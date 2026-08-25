@@ -1,4 +1,5 @@
 import 'package:lifecare_api/core/errors/api_error.dart';
+import 'package:lifecare_api/core/patients/beneficiary_context.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 import 'patient_repository.dart';
 
@@ -43,18 +44,13 @@ class PatientService {
     final fullName = data['full_name'] as String? ??
         '${data['first_name'] ?? ''} ${data['last_name'] ?? ''}'.trim();
 
-    final rawCode = (data['patient_code'] as String?)?.trim() ??
-        (data['patient_number'] as String?)?.trim();
-    final patientCode = (rawCode != null && rawCode.isNotEmpty)
-        ? rawCode
-        : 'LC-${id.replaceAll('-', '').substring(0, 6).toUpperCase()}';
-
+    // patient_code is never accepted from the client — the repository
+    // always assigns the next LC-XXX sequence value server-side.
     return _repo.create(
       id: id,
       walletId: walletId,
       fullName: fullName,
       createdBy: createdBy,
-      patientCode: patientCode,
       phone: data['phone'] as String? ?? data['phone_e164'] as String?,
       nationalId: data['national_id'] as String?,
       accountType: data['account_type'] as String? ?? 'individual',
@@ -132,22 +128,24 @@ class PatientService {
     final primaryCode = primary['patient_code'] as String? ?? '';
     final id = generateUuid();
 
-    // Auto-generate a sub-patient code from primary code + short suffix
+    // Sub-patient code: primary code + short suffix — a different, server-
+    // computed scheme from the main LC-XXX sequence, never client-supplied.
     final suffix = id.replaceAll('-', '').substring(0, 4).toUpperCase();
-    final autoCode = data['patient_code'] as String? ??
-        (primaryCode.isNotEmpty ? '$primaryCode-$suffix' : 'SUB-$suffix');
+    final autoCode =
+        primaryCode.isNotEmpty ? '$primaryCode-$suffix' : 'SUB-$suffix';
 
     return _repo.create(
       id: id,
       walletId: null, // Sub-patients share primary account's wallet
       fullName: data['full_name'] as String,
       createdBy: createdBy,
-      patientCode: autoCode,
+      patientCodeOverride: autoCode,
       phone: data['phone_e164'] as String? ?? data['phone'] as String?,
       nationalId: data['national_id'] as String?,
       accountType: 'dependent',
       primaryAccountId: primaryAccountId,
       relationship: data['relationship'] as String? ?? 'Relative',
+      isMinor: data['is_minor'] == true,
     );
   }
 
@@ -175,11 +173,17 @@ class PatientService {
   // add/remove siblings under an account they don't own. Reuses the same
   // sub-patient repo methods the staff-facing desktop routes already use.
 
+  // A beneficiary has no sub-beneficiaries of their own — the data model
+  // doesn't support beneficiary-of-a-beneficiary. This is the server-side
+  // backstop: a beneficiary-scoped JWT replayed directly against this
+  // endpoint must not be able to read the primary's sibling list either.
   Future<List<Map<String, dynamic>>> listOwnBeneficiaries(
     String requestingPatientId,
   ) async {
-    final primaryAccountId = await _resolvePrimaryAccountId(requestingPatientId);
-    return _repo.findSubPatients(primaryAccountId);
+    final requester = await _repo.findById(requestingPatientId);
+    if (requester == null) throw ApiError.notFound('Patient not found');
+    if (isBeneficiaryRow(requester)) return const [];
+    return _repo.findSubPatients(requestingPatientId);
   }
 
   Future<Map<String, dynamic>> createOwnBeneficiary(
@@ -213,11 +217,48 @@ class PatientService {
     await _repo.softDeleteSubPatient(beneficiaryId);
   }
 
-  Future<String> _resolvePrimaryAccountId(String patientId) async {
-    final patient = await _repo.findById(patientId);
-    if (patient == null) throw ApiError.notFound('Patient not found');
-    return patient['primary_account_id'] as String? ?? patientId;
+  // ── Beneficiary login access ────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> requestLoginAccess(
+    String requestingPatientId,
+    String beneficiaryId,
+  ) async {
+    final requester = await _repo.findById(requestingPatientId);
+    if (requester == null) throw ApiError.notFound('Patient not found');
+    if (requester['primary_account_id'] != null) {
+      throw ApiError.forbidden('Only the primary account holder can request login access');
+    }
+
+    final beneficiary = await _repo.findById(beneficiaryId);
+    if (beneficiary == null) throw ApiError.notFound('Beneficiary not found');
+    if (beneficiary['primary_account_id'] != requestingPatientId) {
+      throw ApiError.forbidden();
+    }
+    if (beneficiary['is_minor'] == true) {
+      throw ApiError.businessRule('Minor beneficiaries cannot request login access');
+    }
+
+    final status = beneficiary['login_access_status'] as String? ?? 'no_login';
+    if (status != 'no_login') {
+      throw ApiError.conflict(
+          'A login-access request is already $status for this beneficiary');
+    }
+
+    return _repo.createLoginAccessRequest(
+      beneficiaryId: beneficiaryId,
+      primaryId: requestingPatientId,
+    );
   }
+
+  Future<(List<Map<String, dynamic>>, int)> listLoginAccessRequests({
+    int limit = 20,
+    int offset = 0,
+    String? status,
+  }) =>
+      _repo.findLoginAccessRequests(limit: limit, offset: offset, status: status);
+
+  Future<void> rejectLoginAccessRequest(String requestId, String actorId) =>
+      _repo.rejectLoginAccessRequest(requestId: requestId, actorId: actorId);
 
   // ── Legacy aliases (kept so old dependents routes still work) ───────────────
 

@@ -102,4 +102,17 @@ class EncounterHandler {
     if (!deleted) throw ApiError.notFound('Encounter not found');
     return noContentResponse();
   }
+
+  Future<Response> setReasonHidden(Request request, String id) async {
+    final patient = requirePatientUser(request);
+    final body = await parseJsonBody(request);
+
+    Validator(body)
+      ..required('hidden')
+      ..isBool('hidden')
+      ..throwIfInvalid();
+
+    await _service.setReasonHidden(id, patient.id, body['hidden'] as bool);
+    return noContentResponse();
+  }
 }

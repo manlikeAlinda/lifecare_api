@@ -4,6 +4,7 @@ import 'package:shelf_router/shelf_router.dart';
 import 'package:lifecare_api/core/database/database.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/logging/logger.dart';
+import 'package:lifecare_api/core/patients/beneficiary_context.dart';
 import 'package:lifecare_api/core/middleware/auth_middleware.dart';
 import 'package:lifecare_api/core/middleware/rate_limit_middleware.dart';
 import 'package:lifecare_api/core/middleware/request_id_middleware.dart';
@@ -54,6 +55,9 @@ import 'package:lifecare_api/core/services/pii_encryption_service.dart';
 import 'package:lifecare_api/modules/ads/ad_handler.dart';
 import 'package:lifecare_api/modules/ads/ad_repository.dart';
 import 'package:lifecare_api/modules/ads/ad_service.dart';
+import 'package:lifecare_api/modules/audit/audit_handler.dart';
+import 'package:lifecare_api/modules/audit/audit_repository.dart';
+import 'package:lifecare_api/modules/audit/audit_service.dart';
 
 Handler buildApp() {
   final pool = Database.pool;
@@ -73,6 +77,7 @@ Handler buildApp() {
   final kycRepo = KycRepository(pool);
   final checkoutRepo = CheckoutRepository(pool);
   final adRepo = AdRepository(pool);
+  final auditRepo = AuditRepository(pool);
 
   // ── Services ────────────────────────────────────────────────────────────────
   final authService = AuthService(authRepo);
@@ -86,13 +91,15 @@ Handler buildApp() {
   final patientTotpService = PatientTotpService(patientAuthRepo);
   final patientAuthService =
       PatientAuthService(patientAuthRepo, authService, patientTotpService);
-  final patientCredService = PatientCredentialsService(patientCredRepo, emailService);
+  final patientCredService =
+      PatientCredentialsService(patientCredRepo, patientRepo, emailService);
   final pesapalService = PesapalService();
   final depositService = DepositService(depositRepo, walletRepo, patientRepo, pesapalService);
   final smileIdentityService = SmileIdentityService();
   final kycService = KycService(kycRepo, smileIdentityService);
   final checkoutService = CheckoutService(checkoutRepo, walletRepo);
   final adService = AdService(adRepo);
+  final auditService = AuditService(auditRepo);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   final authHandler = AuthHandler(authService);
@@ -109,6 +116,7 @@ Handler buildApp() {
   final kycHandler = KycHandler(kycService);
   final checkoutHandler = CheckoutHandler(checkoutService);
   final adHandler = AdHandler(adService);
+  final auditHandler = AuditHandler(auditService);
 
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
@@ -212,6 +220,18 @@ Handler buildApp() {
           (Request req) => userHandler.changePassword(req, req.params['id']!),
         ),
   );
+  router.put(
+    '/v1/users/<id>/avatar',
+    Pipeline().addMiddleware(auth).addHandler(
+          (Request req) => userHandler.updateAvatar(req, req.params['id']!),
+        ),
+  );
+  router.get(
+    '/v1/users/<id>/avatar',
+    Pipeline().addMiddleware(auth).addHandler(
+          (Request req) => userHandler.getAvatar(req, req.params['id']!),
+        ),
+  );
   router.patch(
     '/v1/users/<id>/role',
     adminOnly.addHandler(
@@ -272,6 +292,13 @@ Handler buildApp() {
         final id = req.params['id']!;
         final limit = parseLimit(req);
         final offset = parseOffset(req);
+        // Staff/admin (this route's `auth` pipeline) intentionally see the
+        // unredacted reason regardless of reason_hidden — the spec's
+        // redaction requirement is about protecting a beneficiary from the
+        // PRIMARY specifically, and staff already have full clinical/
+        // billing visibility elsewhere. Only /v1/patient/visits and
+        // /v1/patient/beneficiaries/<id>/visits (patientAuth2, the
+        // primary's own session) pass asPrimaryView: true.
         final (encounters, total) = await encounterService.listEncounters(
           patientId: id,
           limit: limit,
@@ -498,6 +525,12 @@ Handler buildApp() {
         .addHandler(patientAuthHandler.login),
   );
   router.post(
+    '/v1/patient/auth/beneficiary-login',
+    Pipeline()
+        .addMiddleware(rateLimitMiddleware(loginLimiter))
+        .addHandler(patientAuthHandler.beneficiaryLogin),
+  );
+  router.post(
     '/v1/patient/auth/refresh',
     Pipeline()
         .addMiddleware(rateLimitMiddleware(refreshLimiter))
@@ -611,12 +644,13 @@ Handler buildApp() {
       // recorded for them, and the primary holder sees only their own —
       // neither sees the other's, symmetrically.
       final requester = await patientRepo.findById(patientUser.id);
-      final isBeneficiary = requester?['primary_account_id'] != null;
+      final isBeneficiary = isBeneficiaryRow(requester);
 
       final (encounters, total) = await encounterService.listEncounters(
         patientId: isBeneficiary ? null : patientUser.id,
         dependentId: isBeneficiary ? patientUser.id : null,
         excludeDependents: !isBeneficiary,
+        asPrimaryView: !isBeneficiary,
         limit: limit,
         offset: offset,
         dateFrom: qp['dateFrom'],
@@ -638,6 +672,8 @@ Handler buildApp() {
           'encounterRef':   null,
           'createdAt':      e['visited_at']?.toString() ?? e['created_at']?.toString() ?? '',
           'status':         e['status'] ?? '',
+          'reason':         e['reason'],
+          'reasonHidden':   e['reason_hidden'] == true,
         };
       }).toList();
 
@@ -668,7 +704,7 @@ Handler buildApp() {
       // (their own checkouts); the primary holder keeps the full,
       // unfiltered shared-wallet history.
       final requester = await patientRepo.findById(patientUser.id);
-      final isBeneficiary = requester?['primary_account_id'] != null;
+      final isBeneficiary = isBeneficiaryRow(requester);
 
       final (entries, total) = await walletRepo.getLedger(
         wallet['id'] as String,
@@ -716,6 +752,94 @@ Handler buildApp() {
       (Request req) => patientHandler.deleteBeneficiary(req, req.params['id']!),
     ),
   );
+  router.post(
+    '/v1/patient/beneficiaries/<id>/request-login',
+    Pipeline().addMiddleware(patientAuth2).addHandler(
+      (Request req) => patientHandler.requestBeneficiaryLoginAccess(req, req.params['id']!),
+    ),
+  );
+  router.get(
+    '/v1/patient/beneficiaries/<id>/visits',
+    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
+      final patientUser = requirePatientUser(req);
+      final beneficiaryId = req.params['id']!;
+      final beneficiary = await patientRepo.findById(beneficiaryId);
+      if (beneficiary == null) throw ApiError.notFound('Beneficiary not found');
+      if (beneficiary['primary_account_id'] != patientUser.id) {
+        throw ApiError.forbidden();
+      }
+      final qp = req.url.queryParameters;
+      final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
+      final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
+
+      final (encounters, total) = await encounterService.listEncounters(
+        dependentId: beneficiaryId,
+        // Adult beneficiary's reason redacts when hidden; a minor's never
+        // does (asPrimaryView + is_minor check happens in the repository).
+        asPrimaryView: true,
+        limit: limit,
+        offset: offset,
+      );
+
+      final visits = encounters.map((e) {
+        final svcs = (e['services'] as List?)
+            ?.map((s) => (s as Map<String, dynamic>)['name'] as String? ?? '')
+            .where((n) => n.isNotEmpty)
+            .join(', ');
+        return {
+          'visitId':        e['id'],
+          'referenceValue': e['reference_number'] ?? '',
+          'totalMinor':     (((e['total_cost'] as num?) ?? 0) * 100).toInt(),
+          'currency':       'UGX',
+          'services':       (svcs != null && svcs.isNotEmpty) ? svcs : null,
+          'createdAt':      e['visited_at']?.toString() ?? e['created_at']?.toString() ?? '',
+          'status':         e['status'] ?? '',
+          'reason':         e['reason'],
+          'reasonHidden':   e['reason_hidden'] == true,
+        };
+      }).toList();
+
+      return Response.ok(
+        jsonEncode({'data': {'visits': visits, 'total': total}}),
+        headers: {'content-type': 'application/json'},
+      );
+    }),
+  );
+  router.get(
+    '/v1/patient/visits/<id>',
+    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
+      final patientUser = requirePatientUser(req);
+      final encounter = await encounterService.getEncounter(req.params['id']!);
+      final requester = await patientRepo.findById(patientUser.id);
+      final isBeneficiary = isBeneficiaryRow(requester);
+      // Ownership: a beneficiary only owns visits recorded FOR them
+      // (dependent_id); the primary only owns their own (patient_id match,
+      // dependent_id null). Fail-fast 403 — never a silent filter.
+      final owns = isBeneficiary
+          ? encounter['dependent_id'] == patientUser.id
+          : encounter['patient_id'] == patientUser.id && encounter['dependent_id'] == null;
+      if (!owns) throw ApiError.forbidden();
+      return okResponse(encounter);
+    }),
+  );
+  router.patch(
+    '/v1/patient/visits/<id>/reason-hidden',
+    Pipeline().addMiddleware(patientAuth2).addHandler(
+      (Request req) => encounterHandler.setReasonHidden(req, req.params['id']!),
+    ),
+  );
+
+  // ── Admin — Beneficiary login-access-request queue ────────────────────────────
+  router.get(
+    '/v1/admin/beneficiary-login-requests',
+    adminOnly.addHandler(patientHandler.listLoginAccessRequests),
+  );
+  router.post(
+    '/v1/admin/beneficiary-login-requests/<id>/reject',
+    adminOnly.addHandler(
+      (Request req) => patientHandler.rejectLoginAccessRequest(req, req.params['id']!),
+    ),
+  );
 
   // ── Admin — Patient Credential Management ─────────────────────────────────────
   router.post(
@@ -749,6 +873,9 @@ Handler buildApp() {
     ),
   );
 
+  // ── Admin — Audit log ──────────────────────────────────────────────────────────
+  router.get('/v1/admin/audit-log', adminOnly.addHandler(auditHandler.list));
+
   // ── Admin — PII encryption backfill ───────────────────────────────────────────
   router.post(
     '/v1/admin/patients/backfill-pii-encryption',
@@ -759,6 +886,14 @@ Handler buildApp() {
   router.get(
     '/v1/analytics/kpis',
     patientAuth.addHandler(analyticsHandler.getKpis),
+  );
+  router.get(
+    '/v1/analytics/dashboard-kpis',
+    patientAuth.addHandler(analyticsHandler.getDashboardKpis),
+  );
+  router.get(
+    '/v1/analytics/beneficiary-login-stats',
+    adminOnly.addHandler(analyticsHandler.getBeneficiaryLoginStats),
   );
   router.get(
     '/v1/analytics/visits/trend',

@@ -23,7 +23,8 @@ class PatientCredentialsHandler {
   }
 
   Future<Response> getCredentials(Request request, String patientId) async {
-    final result = await _service.getCredentials(patientId);
+    final actor = requireAuthUser(request);
+    final result = await _service.getCredentials(patientId, actorId: actor.id);
     return okResponse(result);
   }
 

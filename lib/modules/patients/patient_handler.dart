@@ -127,6 +127,8 @@ class PatientHandler {
         'email': '',
         'status': (p['is_active'] == true || p['is_active'] == 1) ? 'active' : 'inactive',
         'addedOn': p['created_at']?.toString() ?? '',
+        'isMinor': p['is_minor'] == true,
+        'loginAccessStatus': p['login_access_status'] ?? 'no_login',
       };
 
   Future<Response> listBeneficiaries(Request request) async {
@@ -152,6 +154,7 @@ class PatientHandler {
       'relationship': body['relationship'],
       'national_id': body['nationalId'],
       'phone': body['phone'],
+      'is_minor': body['isMinor'] == true,
     });
     return createdResponse(_toBeneficiaryJson(beneficiary));
   }
@@ -159,6 +162,35 @@ class PatientHandler {
   Future<Response> deleteBeneficiary(Request request, String beneficiaryId) async {
     final patient = requirePatientUser(request);
     await _service.deleteOwnBeneficiary(patient.id, beneficiaryId);
+    return noContentResponse();
+  }
+
+  Future<Response> requestBeneficiaryLoginAccess(
+    Request request,
+    String beneficiaryId,
+  ) async {
+    final patient = requirePatientUser(request);
+    final result = await _service.requestLoginAccess(patient.id, beneficiaryId);
+    return okResponse(result);
+  }
+
+  // ── Admin — login-access-request queue ──────────────────────────────────────
+
+  Future<Response> listLoginAccessRequests(Request request) async {
+    final limit = parseLimit(request);
+    final offset = parseOffset(request);
+    final status = queryParam(request, 'status');
+    final (requests, total) = await _service.listLoginAccessRequests(
+      limit: limit,
+      offset: offset,
+      status: status,
+    );
+    return okListResponse(requests, total: total, limit: limit, offset: offset);
+  }
+
+  Future<Response> rejectLoginAccessRequest(Request request, String requestId) async {
+    final caller = requireAuthUser(request);
+    await _service.rejectLoginAccessRequest(requestId, caller.id);
     return noContentResponse();
   }
 

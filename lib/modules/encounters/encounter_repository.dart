@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/audit/audit_writer.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
@@ -26,7 +27,10 @@ class EncounterRepository {
       "SUBSTR(HEX(e.encounter_id),21))) AS id, "
       "LOWER(CONCAT(SUBSTR(HEX(e.patient_id),1,8),'-',SUBSTR(HEX(e.patient_id),9,4),'-',"
       "SUBSTR(HEX(e.patient_id),13,4),'-',SUBSTR(HEX(e.patient_id),17,4),'-',"
-      "SUBSTR(HEX(e.patient_id),21))) AS patient_id";
+      "SUBSTR(HEX(e.patient_id),21))) AS patient_id, "
+      "LOWER(CONCAT(SUBSTR(HEX(e.dependent_id),1,8),'-',SUBSTR(HEX(e.dependent_id),9,4),'-',"
+      "SUBSTR(HEX(e.dependent_id),13,4),'-',SUBSTR(HEX(e.dependent_id),17,4),'-',"
+      "SUBSTR(HEX(e.dependent_id),21))) AS dependent_id";
 
   Future<(List<Map<String, dynamic>>, int)> findAll({
     int limit = 20,
@@ -38,6 +42,11 @@ class EncounterRepository {
     String? dateFrom,
     String? dateTo,
     String? search,
+    // True when the caller is the PRIMARY viewing a beneficiary's visits —
+    // triggers reason redaction (see _redact). Never set for a beneficiary
+    // viewing their own visits (they own the reason) or for staff/admin
+    // (out of scope for this spec, which only restricts the primary).
+    bool asPrimaryView = false,
   }) async {
     final conditions = <String>[];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
@@ -90,16 +99,18 @@ class EncounterRepository {
 
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
-      'e.status, e.total_cost, e.created_at, '
-      'p.full_name AS patient_name, p.patient_code '
+      'e.status, e.total_cost, e.created_at, e.reason, e.reason_hidden, '
+      'p.full_name AS patient_name, p.patient_code, '
+      'dep.is_minor AS dependent_is_minor '
       'FROM encounters e '
       'LEFT JOIN patients p ON p.patient_id = e.patient_id '
+      'LEFT JOIN patients dep ON dep.patient_id = e.dependent_id '
       '$where '
       'ORDER BY e.visited_at DESC LIMIT :limit OFFSET :offset',
       params,
     );
 
-    final encounters = result.rows.map(_rowToMap).toList();
+    final encounters = result.rows.map(_rowToMap).map((e) => _redact(e, asPrimaryView)).toList();
 
     if (encounters.isNotEmpty) {
       final ids = encounters.map((e) => e['id'] as String).toList();
@@ -115,24 +126,41 @@ class EncounterRepository {
     return (encounters, total);
   }
 
-  Future<Map<String, dynamic>?> findById(String id) async {
+  Future<Map<String, dynamic>?> findById(String id, {bool asPrimaryView = false}) async {
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
-      'e.status, e.total_cost, e.created_at, '
-      'p.full_name AS patient_name, p.patient_code '
+      'e.status, e.total_cost, e.created_at, e.reason, e.reason_hidden, '
+      'p.full_name AS patient_name, p.patient_code, '
+      'dep.is_minor AS dependent_is_minor '
       'FROM encounters e '
       'LEFT JOIN patients p ON p.patient_id = e.patient_id '
+      'LEFT JOIN patients dep ON dep.patient_id = e.dependent_id '
       "WHERE e.encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
 
-    final encounter = _rowToMap(result.rows.first);
+    final encounter = _redact(_rowToMap(result.rows.first), asPrimaryView);
 
     final svcMap = await _findServicesForIds([id]);
     final medMap = await _findMedicationsForIds([id]);
     encounter['services'] = svcMap[id] ?? [];
     encounter['medications'] = medMap[id] ?? [];
+    return encounter;
+  }
+
+  /// Redacts `reason` in-place when [asPrimaryView] and the encounter's
+  /// reason is hidden — never for a minor dependent (they have no toggle,
+  /// so this is defense-in-depth against a stray reason_hidden=1). Keeps
+  /// `reason_hidden` in the response either way so the UI can render the
+  /// "details withheld" placeholder.
+  Map<String, dynamic> _redact(Map<String, dynamic> encounter, bool asPrimaryView) {
+    final hidden = encounter['reason_hidden'] == true;
+    final dependentIsMinor = encounter['dependent_is_minor'] == true;
+    if (asPrimaryView && hidden && !dependentIsMinor) {
+      encounter['reason'] = null;
+    }
+    encounter.remove('dependent_is_minor');
     return encounter;
   }
 
@@ -204,6 +232,26 @@ class EncounterRepository {
       map.putIfAbsent(encId, () => []).add(r);
     }
     return map;
+  }
+
+  /// Beneficiary-owned toggle — caller ownership is checked one level up in
+  /// EncounterService.setReasonHidden before this is ever called.
+  Future<void> setReasonHidden(String id, bool hidden, {required String actorId}) async {
+    await _pool.transactional((conn) async {
+      await conn.execute(
+        "UPDATE encounters SET reason_hidden = :hidden "
+        "WHERE encounter_id = UNHEX(REPLACE(:id, '-', ''))",
+        {'id': id, 'hidden': hidden ? 1 : 0},
+      );
+      await writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'ENCOUNTER_REASON_HIDDEN_TOGGLE',
+        targetType: 'encounter',
+        targetIdUuid: id,
+        after: {'reason_hidden': hidden},
+      );
+    });
   }
 
   // ── Create ────────────────────────────────────────────────────────────────

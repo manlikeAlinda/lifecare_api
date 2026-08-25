@@ -23,6 +23,7 @@ class EncounterService {
     String? dateFrom,
     String? dateTo,
     String? search,
+    bool asPrimaryView = false,
   }) =>
       _repo.findAll(
         limit: limit,
@@ -34,12 +35,30 @@ class EncounterService {
         dateFrom: dateFrom,
         dateTo: dateTo,
         search: search,
+        asPrimaryView: asPrimaryView,
       );
 
-  Future<Map<String, dynamic>> getEncounter(String id) async {
-    final encounter = await _repo.findById(id);
+  Future<Map<String, dynamic>> getEncounter(String id, {bool asPrimaryView = false}) async {
+    final encounter = await _repo.findById(id, asPrimaryView: asPrimaryView);
     if (encounter == null) throw ApiError.notFound('Encounter not found');
     return encounter;
+  }
+
+  /// Beneficiary-owned toggle: only the beneficiary a visit was recorded
+  /// FOR may hide its reason — not the primary, not a sibling beneficiary.
+  /// A primary calling this on their own visit (dependent_id null) always
+  /// 403s — fail-fast, never a silent filter.
+  Future<void> setReasonHidden(
+    String encounterId,
+    String callerPatientId,
+    bool hidden,
+  ) async {
+    final encounter = await _repo.findById(encounterId);
+    if (encounter == null) throw ApiError.notFound('Visit not found');
+    if (encounter['dependent_id'] != callerPatientId) {
+      throw ApiError.forbidden();
+    }
+    await _repo.setReasonHidden(encounterId, hidden, actorId: callerPatientId);
   }
 
   Future<Map<String, dynamic>> createEncounter(

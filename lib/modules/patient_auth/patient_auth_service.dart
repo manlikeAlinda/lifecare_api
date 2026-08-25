@@ -60,9 +60,18 @@ class PatientAuthService {
     };
   }
 
+  /// [expectBeneficiary] enforces the primary/beneficiary login-endpoint
+  /// split: PatientAuthHandler.login() calls this with `false`, the new
+  /// beneficiaryLogin() handler calls it with `true`. A phone number that
+  /// resolves to the other account type is rejected here — after credential
+  /// verification (so it doesn't become a phone-existence oracle beyond
+  /// what the suspended-account branch already reveals) but before any
+  /// tokens are issued. Both flows share this one implementation so
+  /// password/bcrypt/session/audit logic can never drift between them.
   Future<Map<String, dynamic>> login({
     required String phone,
     required String password,
+    required bool expectBeneficiary,
   }) async {
     final credential = await _repo.findByPhone(phone);
     if (credential == null) {
@@ -96,6 +105,20 @@ class PatientAuthService {
         throw ApiError.unauthenticated('Invalid credentials');
       }
       mustChangePw = credential['must_change_pw'] == true;
+    }
+
+    // Account-type check happens after credential verification (so it
+    // doesn't become a phone-existence oracle beyond what the
+    // suspended-account branch already reveals) but before ANY session or
+    // challenge token is issued — including the TOTP challenge below, since
+    // verifyTotpLogin() is intentionally type-agnostic and would otherwise
+    // let a TOTP-enabled account slip through the wrong endpoint.
+    final isBeneficiary = await _repo.isBeneficiary(patientId);
+    if (isBeneficiary != expectBeneficiary) {
+      await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_LOGIN_WRONG_FLOW');
+      throw ApiError.forbidden(expectBeneficiary
+          ? 'This phone number belongs to a primary account. Use the primary login.'
+          : 'This phone number belongs to a beneficiary account. Use the beneficiary login.');
     }
 
     // TOTP-enabled accounts don't get full tokens on password verification

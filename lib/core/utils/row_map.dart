@@ -23,6 +23,9 @@ Map<String, dynamic> rowToMap(ResultSetRow row) {
     'is_consultation',
     'must_change_pw',
     'totp_enabled',
+    'is_minor',
+    'beneficiary_is_minor',
+    'reason_hidden',
   };
 
   // ── Numeric columns (int, bigint, decimal, or computed aggregates) ─────────
@@ -56,6 +59,12 @@ Map<String, dynamic> rowToMap(ResultSetRow row) {
     'total_encounters',
     // ads
     'display_order',
+    // beneficiary login stats
+    'beneficiary_count',
+    'pending_count',
+    'active_count',
+    'suspended_count',
+    'expired_count',
   };
 
   for (final key in map.keys.toList()) {

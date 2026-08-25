@@ -1,5 +1,7 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/config/app_config.dart';
 import 'package:lifecare_api/core/logging/logger.dart';
+import 'package:lifecare_api/core/utils/clinic_time.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 
 class AnalyticsRepository {
@@ -53,6 +55,77 @@ class AnalyticsRepository {
     };
   }
 
+  /// KPIs for the dashboard Overview page. Unlike [getKpis] (which reports
+  /// support with an arbitrary caller-supplied range), this always uses the
+  /// clinic's canonical today/month boundaries — one source of truth so a
+  /// UI label can never diverge from the query that produced the number.
+  /// See ClinicTime for the timezone rationale.
+  Future<Map<String, dynamic>> getDashboardKpis() async {
+    final todayStart = ClinicTime.sql(ClinicTime.startOfToday());
+    final todayEnd   = ClinicTime.sql(ClinicTime.endOfToday());
+    final monthStart = ClinicTime.sql(ClinicTime.startOfMonth());
+    final now        = ClinicTime.sql(ClinicTime.nowUtc());
+
+    final results = await Future.wait([
+      _count(
+        'SELECT COUNT(*) as val FROM encounters '
+        'WHERE visited_at >= :from AND visited_at < :to',
+        {'from': todayStart, 'to': todayEnd},
+      ),
+      _count(
+        'SELECT COUNT(*) as val FROM encounters '
+        'WHERE visited_at >= :from AND visited_at <= :to',
+        {'from': monthStart, 'to': now},
+      ),
+      _count(
+        'SELECT COUNT(*) as val FROM wallet_ledger '
+        'WHERE created_at >= :from AND created_at <= :to',
+        {'from': monthStart, 'to': now},
+      ),
+      _sum(
+        "SELECT COALESCE(SUM(amount_shillings), 0) as val FROM wallet_ledger "
+        "WHERE type = 'deduction' AND status = 'posted' "
+        'AND created_at >= :from AND created_at < :to',
+        {'from': todayStart, 'to': todayEnd},
+      ),
+      _sum(
+        "SELECT COALESCE(SUM(amount_shillings), 0) as val FROM wallet_ledger "
+        "WHERE type = 'deduction' AND status = 'posted' "
+        'AND created_at >= :from AND created_at <= :to',
+        {'from': monthStart, 'to': now},
+      ),
+      _count(
+        'SELECT COUNT(*) as val FROM patients '
+        'WHERE created_at >= :from AND created_at <= :to AND is_active = 1',
+        {'from': monthStart, 'to': now},
+      ),
+      _count('SELECT COUNT(*) as val FROM patients WHERE is_active = 1', {}),
+      _count(
+        "SELECT COUNT(*) as val FROM encounters WHERE status != 'cancelled'",
+        {},
+      ),
+      _count(
+        'SELECT COUNT(DISTINCT user_id) as val FROM sessions '
+        'WHERE revoked_at IS NULL AND expires_at > :now',
+        {'now': now},
+      ),
+    ]);
+
+    return {
+      'timezone':                ClinicTime.offsetLabel,
+      'generated_at':            DateTime.now().toUtc().toIso8601String(),
+      'encounters_today':        results[0],
+      'encounters_month':        results[1],
+      'transactions_month':      results[2],
+      'revenue_today_shillings': results[3],
+      'revenue_month_shillings': results[4],
+      'new_patients_month':      results[5],
+      'active_patients':         results[6],
+      'open_encounters':         results[7],
+      'active_staff':            results[8],
+    };
+  }
+
   Future<List<Map<String, dynamic>>> getVisitTrend({
     String? dateFrom,
     String? dateTo,
@@ -82,33 +155,32 @@ class AnalyticsRepository {
 
   /// Returns one row per day for the last [days] days (including today),
   /// with zero-filled entries for days that have no encounters.
+  ///
+  /// Buckets by clinic-local calendar day in Dart rather than MySQL's
+  /// DATE()/CURDATE() — those reflect the DB server's own session
+  /// timezone, which is a different (and untracked) thing from the
+  /// clinic's configured offset. Doing the bucketing here keeps the one
+  /// definition of "day" (ClinicTime) authoritative everywhere.
   Future<List<int>> getDailyCounts({int days = 7}) async {
-    final result = await _pool.execute(
-      'SELECT DATE(created_at) AS date, COUNT(*) AS cnt '
-      'FROM encounters '
-      'WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY) '
-      'GROUP BY DATE(created_at) '
-      'ORDER BY date ASC',
-      {'days': days},
+    final todayClinicDate = ClinicTime.clinicDateOf(ClinicTime.nowUtc());
+    final oldestClinicDate = todayClinicDate.subtract(Duration(days: days - 1));
+    final lowerBoundUtc = oldestClinicDate.subtract(
+      Duration(minutes: AppConfig.clinicTzOffsetMinutes),
     );
 
-    // Build a map of date-string → count from DB rows.
-    final dbMap = <String, int>{};
-    for (final row in result.rows) {
-      final r = row.assoc();
-      final date = r['date'] ?? '';
-      final count = int.tryParse(r['cnt'] ?? '0') ?? 0;
-      if (date.isNotEmpty) dbMap[date] = count;
-    }
+    final result = await _pool.execute(
+      'SELECT visited_at FROM encounters WHERE visited_at >= :from',
+      {'from': ClinicTime.sql(lowerBoundUtc)},
+    );
 
-    // Generate the full date range (oldest first), zero-filling missing days.
-    final today = DateTime.now();
-    final counts = <int>[];
-    for (var i = days - 1; i >= 0; i--) {
-      final d = today.subtract(Duration(days: i));
-      final key =
-          '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-      counts.add(dbMap[key] ?? 0);
+    final counts = List<int>.filled(days, 0);
+    for (final row in result.rows) {
+      final raw = row.assoc()['visited_at'];
+      if (raw == null) continue;
+      final visitedUtc = DateTime.parse(raw).toUtc();
+      final visitedClinicDate = ClinicTime.clinicDateOf(visitedUtc);
+      final dayIndex = visitedClinicDate.difference(oldestClinicDate).inDays;
+      if (dayIndex >= 0 && dayIndex < days) counts[dayIndex]++;
     }
     return counts;
   }
@@ -209,6 +281,52 @@ class AnalyticsRepository {
       'ledger_summary': ledger.rows
           .map(rowToMap)
           .toList(),
+    };
+  }
+
+  /// Per-primary beneficiary login-access status counts, for the desktop
+  /// admin's aggregate view. Deliberately reads only `patients` — no visit
+  /// content, no medical reasons, nothing from `encounters`.
+  Future<Map<String, dynamic>> getBeneficiaryLoginStats() async {
+    final totals = await _pool.execute(
+      "SELECT login_access_status, COUNT(*) as val FROM patients "
+      "WHERE account_type = 'dependent' AND deleted_at IS NULL "
+      'GROUP BY login_access_status',
+      {},
+    );
+    final byStatus = <String, int>{
+      'no_login': 0, 'pending': 0, 'active': 0, 'suspended': 0, 'expired': 0,
+    };
+    for (final row in totals.rows) {
+      final r = row.assoc();
+      final status = r['login_access_status'];
+      if (status != null && byStatus.containsKey(status)) {
+        byStatus[status] = int.tryParse(r['val'] ?? '0') ?? 0;
+      }
+    }
+
+    final perPrimary = await _pool.execute(
+      'SELECT '
+      "LOWER(CONCAT(SUBSTR(HEX(b.primary_account_id),1,8),'-',SUBSTR(HEX(b.primary_account_id),9,4),'-',"
+      "SUBSTR(HEX(b.primary_account_id),13,4),'-',SUBSTR(HEX(b.primary_account_id),17,4),'-',"
+      "SUBSTR(HEX(b.primary_account_id),21))) AS primary_id, "
+      'p.full_name AS primary_name, p.patient_code AS primary_code, '
+      'COUNT(*) AS beneficiary_count, '
+      "SUM(b.login_access_status = 'pending') AS pending_count, "
+      "SUM(b.login_access_status = 'active') AS active_count, "
+      "SUM(b.login_access_status = 'suspended') AS suspended_count, "
+      "SUM(b.login_access_status = 'expired') AS expired_count "
+      'FROM patients b '
+      'JOIN patients p ON p.patient_id = b.primary_account_id '
+      "WHERE b.account_type = 'dependent' AND b.deleted_at IS NULL "
+      'GROUP BY b.primary_account_id, p.full_name, p.patient_code '
+      'ORDER BY p.full_name',
+      {},
+    );
+
+    return {
+      'totals': byStatus,
+      'by_primary': perPrimary.rows.map(rowToMap).toList(),
     };
   }
 

@@ -4,13 +4,15 @@ import 'package:bcrypt/bcrypt.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/services/email_service.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
+import 'package:lifecare_api/modules/patients/patient_repository.dart';
 import 'patient_credentials_repository.dart';
 
 class PatientCredentialsService {
   final PatientCredentialsRepository _repo;
+  final PatientRepository _patientRepo;
   final EmailService _emailService;
 
-  PatientCredentialsService(this._repo, this._emailService);
+  PatientCredentialsService(this._repo, this._patientRepo, this._emailService);
 
   static const _pinChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -21,6 +23,11 @@ class PatientCredentialsService {
   }) async {
     final patient = await _repo.findPatientById(patientId);
     if (patient == null) throw ApiError.notFound('Patient not found');
+
+    if (patient['is_minor'] == true) {
+      throw ApiError.forbidden(
+          'Cannot create login credentials for a minor beneficiary');
+    }
 
     final phoneE164 = patient['phone_e164'] as String?;
     if (phoneE164 == null || phoneE164.isEmpty) {
@@ -61,6 +68,19 @@ class PatientCredentialsService {
       action: 'PATIENT_CREDENTIALS_GENERATE',
     );
 
+    // Beneficiary's login-access journey reaches 'active' as soon as
+    // credentials exist (see migration 033's state table) — the primary's
+    // UI reads this one column without reaching into credential internals.
+    // Auto-resolves any open request so the admin queue never lingers a
+    // "pending" item after credentials already exist. Primaries stay
+    // 'no_login' permanently — that column is only meaningful for
+    // beneficiaries, so leave it alone when generating a primary's own
+    // credentials.
+    if (patient['primary_account_id'] != null) {
+      await _patientRepo.setLoginAccessStatus(patientId, 'active');
+      await _patientRepo.autoApproveLoginAccessRequest(patientId);
+    }
+
     bool emailSent = false;
     if (email != null && email.isNotEmpty) {
       emailSent = await _emailService.sendActivationEmail(
@@ -80,9 +100,21 @@ class PatientCredentialsService {
     };
   }
 
-  Future<Map<String, dynamic>> getCredentials(String patientId) async {
+  Future<Map<String, dynamic>> getCredentials(
+    String patientId, {
+    required String actorId,
+  }) async {
     final patient = await _repo.findPatientById(patientId);
     if (patient == null) throw ApiError.notFound('Patient not found');
+
+    // Credential views are audited regardless of whether credentials exist
+    // yet — an admin looking up a not-yet-provisioned beneficiary is still
+    // a "viewed this beneficiary's credential state" event.
+    await _repo.insertAuditLog(
+      actorId: actorId,
+      patientId: patientId,
+      action: 'PATIENT_CREDENTIALS_VIEW',
+    );
 
     final credential = await _repo.findByPatientId(patientId);
     if (credential == null) {
@@ -164,6 +196,10 @@ class PatientCredentialsService {
 
     await _repo.setStatus(patientId, 'suspended');
     await _repo.revokeAllSessions(patientId);
+    final patient = await _repo.findPatientById(patientId);
+    if (patient?['primary_account_id'] != null) {
+      await _patientRepo.setLoginAccessStatus(patientId, 'suspended');
+    }
 
     await _repo.insertAuditLog(
       actorId: actorId,
@@ -184,6 +220,10 @@ class PatientCredentialsService {
     }
 
     await _repo.setStatus(patientId, 'active');
+    final patient = await _repo.findPatientById(patientId);
+    if (patient?['primary_account_id'] != null) {
+      await _patientRepo.setLoginAccessStatus(patientId, 'active');
+    }
 
     await _repo.insertAuditLog(
       actorId: actorId,

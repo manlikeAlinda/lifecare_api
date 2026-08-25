@@ -65,6 +65,27 @@ class PatientAuthHandler {
     final result = await _service.login(
       phone: body['phone'] as String,
       password: body['password'] as String,
+      expectBeneficiary: false,
+    );
+
+    return okResponse(result);
+  }
+
+  /// Distinct beneficiary login path — same handler shape as login(), just
+  /// dispatches to the same service method with the opposite account-type
+  /// expectation. No password/session logic duplicated here.
+  Future<Response> beneficiaryLogin(Request request) async {
+    final body = await parseJsonBody(request);
+
+    Validator(body)
+      ..required('phone')
+      ..required('password')
+      ..throwIfInvalid();
+
+    final result = await _service.login(
+      phone: body['phone'] as String,
+      password: body['password'] as String,
+      expectBeneficiary: true,
     );
 
     return okResponse(result);

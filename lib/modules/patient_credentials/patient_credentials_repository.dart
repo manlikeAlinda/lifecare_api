@@ -25,7 +25,10 @@ class PatientCredentialsRepository {
     final result = await _pool.execute(
       'SELECT '
       '${uuidSelect('patient_id')}, '
-      'patient_code, full_name, phone_e164 '
+      'patient_code, full_name, phone_e164, is_minor, '
+      "LOWER(CONCAT(SUBSTR(HEX(primary_account_id),1,8),'-',SUBSTR(HEX(primary_account_id),9,4),'-',"
+      "SUBSTR(HEX(primary_account_id),13,4),'-',SUBSTR(HEX(primary_account_id),17,4),'-',"
+      "SUBSTR(HEX(primary_account_id),21))) AS primary_account_id "
       'FROM patients WHERE ${uuidWhere('patient_id', 'patientId')} LIMIT 1',
       {'patientId': patientId},
     );

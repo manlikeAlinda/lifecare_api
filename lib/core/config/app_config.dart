@@ -112,4 +112,15 @@ class AppConfig {
   // ── System actor (audit_log actor for webhook/provider-originated writes) ──
   // Fixed UUID, must match the seeded row in migrations/026_system_actor.sql.
   static const String systemActorId = '2f6554b5-a339-42cb-9011-de5e893aa112';
+
+  // ── Clinic operating timezone ─────────────────────────────────────────────
+  // Fixed UTC offset rather than an IANA zone name — this clinic is
+  // single-site (Uganda, EAT, UTC+3, no DST), so a plain offset avoids
+  // pulling in a timezone-database dependency for a distinction that
+  // doesn't apply here. "Today"/"this month" boundaries for dashboard KPIs
+  // are computed against this offset, not the server's own clock, so they
+  // match the clinic's actual business day regardless of which region the
+  // API happens to be hosted in.
+  static int get clinicTzOffsetMinutes =>
+      int.parse(_env['CLINIC_TZ_OFFSET_MINUTES'] ?? '180');
 }

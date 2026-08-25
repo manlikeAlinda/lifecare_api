@@ -22,6 +22,24 @@ class PatientAuthRepository {
     return _rowToMap(result.rows.first);
   }
 
+  /// True when [patientId] is a beneficiary (sub-account), not a primary
+  /// account holder — used by login() to enforce the primary/beneficiary
+  /// login-endpoint split (see PatientAuthService.login's expectBeneficiary).
+  Future<bool> isBeneficiary(String patientId) async {
+    // Compare to a boolean expression rather than selecting the raw
+    // BINARY(16) column — mysql_client's assoc() force-decodes every
+    // column as a Dart String, and arbitrary UUID bytes are not valid
+    // UTF-8, so a raw binary select here throws a FormatException that
+    // poisons the pooled connection.
+    final result = await _pool.execute(
+      "SELECT (primary_account_id IS NOT NULL) AS is_beneficiary FROM patients "
+      "WHERE ${uuidWhere('patient_id', 'patientId')} LIMIT 1",
+      {'patientId': patientId},
+    );
+    if (result.rows.isEmpty) return false;
+    return result.rows.first.assoc()['is_beneficiary'] == '1';
+  }
+
   // ── TOTP 2FA ────────────────────────────────────────────────────────────────
 
   // Ciphertext is stored base64-encoded (ASCII-safe text), not raw bytes —

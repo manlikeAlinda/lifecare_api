@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/audit/audit_writer.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/services/pii_encryption_service.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
@@ -28,7 +29,8 @@ class PatientRepository {
 
   static const _selectFields =
       'SELECT $_uuidId, patient_code, full_name, phone_e164, national_id, '
-      'is_active, created_at, account_type, relationship, '
+      'is_active, created_at, account_type, relationship, is_minor, '
+      'login_access_status, '
       '$_primaryAccountUuid AS primary_account_id '
       'FROM patients';
 
@@ -113,17 +115,34 @@ class PatientRepository {
   /// Pass [walletId] for primary accounts — a wallet row is created atomically.
   /// Omit [walletId] for sub-patients (beneficiaries) — they share the primary
   /// account's wallet and do NOT get their own.
+  /// Generates the next LC-XXX code. Must be called on the same connection
+  /// as the patient INSERT it backs, inside one transaction — MySQL's
+  /// AUTO_INCREMENT on patient_code_seq is already a safe, DB-level atomic
+  /// counter under concurrent callers, so no application-level locking is
+  /// needed here. If the enclosing transaction rolls back, the burned
+  /// sequence number is an accepted, ordinary AUTO_INCREMENT gap.
+  Future<String> _nextPatientCode(MySQLConnection conn) async {
+    await conn.execute('INSERT INTO patient_code_seq VALUES (NULL)', {});
+    final result = await conn.execute('SELECT LAST_INSERT_ID() AS seq', {});
+    final seq = int.parse(result.rows.first.assoc()['seq'] ?? '0');
+    return 'LC-${seq.toString().padLeft(3, '0')}';
+  }
+
   Future<Map<String, dynamic>> create({
     required String id,
     required String fullName,
     required String createdBy,
     String? walletId,
-    String? patientCode,
     String? phone,
     String? nationalId,
     String accountType = 'individual',
     String? primaryAccountId,
     String? relationship,
+    bool isMinor = false,
+    // Server-computed override for callers with their own scheme (e.g.
+    // sub-patients: {primaryCode}-{suffix}) — never client-suppliable.
+    // Independent (non-dependent) patients always get the LC-XXX sequence.
+    String? patientCodeOverride,
   }) async {
     // Encrypted alongside plaintext (dual-write) — see PiiEncryptionService.
     // Computed before the transaction since it's just crypto, no DB access.
@@ -134,6 +153,9 @@ class PatientRepository {
     // Patient + wallet are atomic; audit is best-effort outside the transaction.
     try {
       await _pool.transactional((conn) async {
+        final patientCode =
+            patientCodeOverride ?? await _nextPatientCode(conn);
+
         final primaryIdHex = primaryAccountId?.replaceAll('-', '');
         final primaryIdExpr = primaryIdHex != null
             ? "UNHEX('$primaryIdHex')"
@@ -142,10 +164,10 @@ class PatientRepository {
         await conn.execute(
           'INSERT INTO patients '
           '(patient_id, patient_code, full_name, phone_e164, phone_enc, '
-          ' national_id, nat_id_enc, account_type, primary_account_id, relationship) '
+          ' national_id, nat_id_enc, account_type, primary_account_id, relationship, is_minor) '
           "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
           ':phone, :phoneEnc, :nationalId, :nationalIdEnc, :accountType, '
-          '$primaryIdExpr, :relationship)',
+          '$primaryIdExpr, :relationship, :isMinor)',
           {
             'id': id,
             'patientCode': patientCode,
@@ -156,6 +178,7 @@ class PatientRepository {
             'nationalIdEnc': nationalIdEnc,
             'accountType': accountType,
             'relationship': relationship,
+            'isMinor': isMinor ? 1 : 0,
           },
         );
 
@@ -209,14 +232,16 @@ class PatientRepository {
   ) async {
     if (fields.isEmpty) return findById(id);
 
+    // patient_code is deliberately excluded — server-generated at create
+    // time and immutable after that, never editable via update.
     final allowed = <String>[
       'full_name',
       'phone_e164',
       'national_id',
       'account_type',
-      'patient_code',
       'is_active',
       'relationship',
+      'is_minor',
     ];
     final setClauseParts =
         fields.keys.where(allowed.contains).map((k) => '$k = :$k').toList();
@@ -419,6 +444,155 @@ class PatientRepository {
       "WHERE patient_id = UNHEX(REPLACE(:id, '-', '')) AND deleted_at IS NULL",
       {'id': id},
     );
+  }
+
+  // ── Beneficiary login access ────────────────────────────────────────────────
+
+  /// Sets the beneficiary's login-access journey state. Deliberately NOT
+  /// exposed through the generic update()/allowed list — this must only be
+  /// driven by PatientCredentialsService/PatientService transitions, never
+  /// by a client PATCHing /v1/patients/<id> or /v1/patient/beneficiaries/<id>.
+  Future<void> setLoginAccessStatus(String patientId, String status) async {
+    await _pool.execute(
+      "UPDATE patients SET login_access_status = :status "
+      "WHERE ${uuidWhere('patient_id', 'id')}",
+      {'id': patientId, 'status': status},
+    );
+  }
+
+  /// Inserts a login-access-request row, flips the beneficiary to 'pending',
+  /// and writes the audit entry — all in one transaction so the three can
+  /// never diverge.
+  Future<Map<String, dynamic>> createLoginAccessRequest({
+    required String beneficiaryId,
+    required String primaryId,
+  }) async {
+    final requestId = generateUuid();
+    await _pool.transactional((conn) async {
+      await conn.execute(
+        'INSERT INTO beneficiary_login_requests '
+        '(request_id, beneficiary_id, primary_id, status) '
+        "VALUES (${uuidParam('requestId')}, ${uuidParam('beneficiaryId')}, "
+        "${uuidParam('primaryId')}, 'pending')",
+        {
+          'requestId': requestId,
+          'beneficiaryId': beneficiaryId,
+          'primaryId': primaryId,
+        },
+      );
+      await conn.execute(
+        "UPDATE patients SET login_access_status = 'pending' "
+        "WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
+        {'beneficiaryId': beneficiaryId},
+      );
+      await writeAudit(
+        conn: conn,
+        actorId: primaryId,
+        action: 'BENEFICIARY_LOGIN_ACCESS_REQUEST',
+        targetType: 'patient',
+        targetIdUuid: beneficiaryId,
+      );
+    });
+    return {
+      'request_id': requestId,
+      'beneficiary_id': beneficiaryId,
+      'primary_id': primaryId,
+      'status': 'pending',
+    };
+  }
+
+  Future<(List<Map<String, dynamic>>, int)> findLoginAccessRequests({
+    int limit = 20,
+    int offset = 0,
+    String? status,
+  }) async {
+    final conditions = <String>[];
+    final params = <String, dynamic>{'limit': limit, 'offset': offset};
+    if (status != null && status.isNotEmpty) {
+      conditions.add('r.status = :status');
+      params['status'] = status;
+    }
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+
+    final countResult = await _pool.execute(
+      'SELECT COUNT(*) as total FROM beneficiary_login_requests r $where',
+      status != null ? {'status': status} : {},
+    );
+    final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
+
+    final result = await _pool.execute(
+      'SELECT ${uuidSelect('r.request_id', 'request_id')}, '
+      '${uuidSelect('r.beneficiary_id', 'beneficiary_id')}, '
+      '${uuidSelect('r.primary_id', 'primary_id')}, '
+      'r.status, r.requested_at, r.resolved_at, '
+      'b.full_name AS beneficiary_name, b.phone_e164 AS beneficiary_phone, '
+      'b.patient_code AS beneficiary_code, b.is_minor AS beneficiary_is_minor, '
+      'p.full_name AS primary_name, p.patient_code AS primary_code '
+      'FROM beneficiary_login_requests r '
+      'LEFT JOIN patients b ON b.patient_id = r.beneficiary_id '
+      'LEFT JOIN patients p ON p.patient_id = r.primary_id '
+      '$where '
+      'ORDER BY r.requested_at DESC LIMIT :limit OFFSET :offset',
+      params,
+    );
+
+    return (result.rows.map(_rowToMap).toList(), total);
+  }
+
+  /// Auto-resolves the most recent open request for [beneficiaryId] to
+  /// 'approved' once an admin has actually generated credentials — called
+  /// from PatientCredentialsService.generate() so a queue item never lingers
+  /// "pending" after credentials already exist. No-op if there is no
+  /// pending request (a beneficiary can get credentials without ever having
+  /// gone through the request flow).
+  Future<void> autoApproveLoginAccessRequest(String beneficiaryId) async {
+    await _pool.execute(
+      "UPDATE beneficiary_login_requests "
+      "SET status = 'approved', resolved_at = NOW() "
+      "WHERE ${uuidWhere('beneficiary_id', 'beneficiaryId')} AND status = 'pending' "
+      "ORDER BY requested_at DESC LIMIT 1",
+      {'beneficiaryId': beneficiaryId},
+    );
+  }
+
+  /// Rejects the given request, resets its beneficiary back to 'no_login',
+  /// and writes the audit entry in one transaction. Throws ApiError.notFound
+  /// if the request doesn't exist or is no longer pending.
+  Future<void> rejectLoginAccessRequest({
+    required String requestId,
+    required String actorId,
+  }) async {
+    await _pool.transactional((conn) async {
+      final result = await conn.execute(
+        "SELECT ${uuidSelect('beneficiary_id', 'beneficiary_id')} "
+        "FROM beneficiary_login_requests "
+        "WHERE ${uuidWhere('request_id', 'requestId')} AND status = 'pending' LIMIT 1",
+        {'requestId': requestId},
+      );
+      if (result.rows.isEmpty) {
+        throw ApiError.notFound('Login-access request not found or already resolved');
+      }
+      final beneficiaryId = result.rows.first.assoc()['beneficiary_id']!;
+
+      await conn.execute(
+        "UPDATE beneficiary_login_requests SET status = 'rejected', resolved_at = NOW(), "
+        "resolved_by = ${uuidParam('actorId')} "
+        "WHERE ${uuidWhere('request_id', 'requestId')}",
+        {'requestId': requestId, 'actorId': actorId},
+      );
+      await conn.execute(
+        "UPDATE patients SET login_access_status = 'no_login' "
+        "WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
+        {'beneficiaryId': beneficiaryId},
+      );
+      await writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'BENEFICIARY_LOGIN_ACCESS_REJECT',
+        targetType: 'patient',
+        targetIdUuid: beneficiaryId,
+      );
+    });
   }
 
   // ── Legacy dependent methods (kept for reference; app now uses sub-patients) ─

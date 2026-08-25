@@ -28,6 +28,16 @@ class AnalyticsHandler {
     return okListResponse(trend, total: trend.length);
   }
 
+  Future<Response> getDashboardKpis(Request request) async {
+    final kpis = await _service.getDashboardKpis();
+    return okResponse(kpis);
+  }
+
+  Future<Response> getBeneficiaryLoginStats(Request request) async {
+    final stats = await _service.getBeneficiaryLoginStats();
+    return okResponse(stats);
+  }
+
   Future<Response> getDepositsHeld(Request request) async {
     final data = await _service.getDepositsHeld();
     return okResponse(data);

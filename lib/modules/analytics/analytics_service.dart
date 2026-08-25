@@ -44,6 +44,11 @@ class AnalyticsService {
     );
   }
 
+  Future<Map<String, dynamic>> getDashboardKpis() => _repo.getDashboardKpis();
+
+  Future<Map<String, dynamic>> getBeneficiaryLoginStats() =>
+      _repo.getBeneficiaryLoginStats();
+
   Future<Map<String, dynamic>> getDepositsHeld() => _repo.getDepositsHeld();
 
   Future<List<int>> getDailyCounts({int days = 7}) =>
