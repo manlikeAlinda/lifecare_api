@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/audit/audit_writer.dart' as audit;
 import 'package:lifecare_api/core/utils/row_map.dart';
@@ -194,6 +195,61 @@ class UserRepository {
         targetIdUuid: id,
       );
     });
+  }
+
+  // avatar_blob is MEDIUMBLOB. This connector's execute() does client-side
+  // string substitution, not true prepared-statement binary binding (see
+  // _substitureParams in mysql_client) — a raw Uint8List param would get
+  // mangled via .toString(). Route it through UNHEX()/HEX() instead, the
+  // same hex-round-trip already used everywhere else in this codebase for
+  // binary columns (UUIDs).
+  Future<void> updateAvatar({
+    required String id,
+    required Uint8List bytes,
+    required String contentType,
+    required String actorId,
+  }) async {
+    final hex = bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    await _pool.transactional((conn) async {
+      await conn.execute(
+        'UPDATE users '
+        'SET avatar_blob = UNHEX(:blobHex), '
+        '    avatar_content_type = :contentType, '
+        '    avatar_updated_at = NOW(6) '
+        "WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
+        {'blobHex': hex, 'contentType': contentType, 'id': id},
+      );
+      await audit.writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'update_avatar',
+        targetType: 'user',
+        targetIdUuid: id,
+      );
+    });
+  }
+
+  Future<Map<String, dynamic>?> getAvatar(String id) async {
+    final result = await _pool.execute(
+      'SELECT HEX(avatar_blob) AS avatar_hex, avatar_content_type '
+      "FROM users WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
+      {'id': id},
+    );
+    if (result.rows.isEmpty) return null;
+    final row = result.rows.first.assoc();
+    final hex = row['avatar_hex'];
+    if (hex == null || hex.isEmpty) return null;
+
+    final bytes = Uint8List(hex.length ~/ 2);
+    for (var i = 0; i < bytes.length; i++) {
+      bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+    }
+    return {
+      'bytes': bytes,
+      'content_type': row['avatar_content_type'] ?? 'image/png',
+    };
   }
 
   Future<void> updateRole(String id, String role, String actorId) async {

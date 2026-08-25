@@ -1,7 +1,13 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:bcrypt/bcrypt.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 import 'user_repository.dart';
+
+const _allowedAvatarTypes = {'image/jpeg', 'image/png', 'image/webp'};
+const _maxAvatarBytes = 5 * 1024 * 1024; // 5MB — matches client-side cap
 
 class UserService {
   final UserRepository _repo;
@@ -116,6 +122,59 @@ class UserService {
     final user = await _repo.findById(id);
     if (user == null) throw ApiError.notFound('User not found');
     await _repo.revokeAllSessions(id, actorId);
+  }
+
+  Future<void> updateAvatar(
+    String id,
+    Map<String, dynamic> data,
+    String actorId,
+  ) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+
+    final contentType = data['content_type'] as String?;
+    final base64Body = data['image_base64'] as String?;
+    if (contentType == null || base64Body == null) {
+      throw ApiError.validationError(
+        'content_type and image_base64 are required',
+      );
+    }
+    if (!_allowedAvatarTypes.contains(contentType)) {
+      throw ApiError.validationError(
+        'Unsupported image type. Use JPEG, PNG, or WebP.',
+      );
+    }
+
+    late final Uint8List bytes;
+    try {
+      bytes = base64Decode(base64Body);
+    } on FormatException {
+      throw ApiError.validationError('image_base64 is not valid base64');
+    }
+
+    if (bytes.isEmpty) {
+      throw ApiError.validationError('Image data is empty');
+    }
+    if (bytes.length > _maxAvatarBytes) {
+      throw ApiError.validationError(
+        'Image exceeds the 5MB size limit',
+      );
+    }
+
+    await _repo.updateAvatar(
+      id: id,
+      bytes: bytes,
+      contentType: contentType,
+      actorId: actorId,
+    );
+  }
+
+  /// Returns null if the user has no avatar set — callers render the
+  /// client-side default placeholder in that case, never a broken image.
+  Future<Map<String, dynamic>?> getAvatar(String id) async {
+    final user = await _repo.findById(id);
+    if (user == null) throw ApiError.notFound('User not found');
+    return _repo.getAvatar(id);
   }
 
   Future<Map<String, dynamic>> changeRole(String id, String role, String actorId) async {

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:shelf/shelf.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/middleware/auth_middleware.dart';
@@ -137,6 +139,32 @@ class UserHandler {
     if (!caller.isAdmin && caller.id != id) throw ApiError.forbidden();
     await _service.revokeAllSessions(id, caller.id);
     return noContentResponse();
+  }
+
+  Future<Response> updateAvatar(Request request, String id) async {
+    final caller = requireAuthUser(request);
+    // Self-service only for now — no requirement to let an admin set
+    // someone else's picture, so keep this narrower than the general
+    // admin-can-touch-anyone pattern used elsewhere in this handler.
+    if (caller.id != id) throw ApiError.forbidden();
+    final body = await parseJsonBody(request);
+    await _service.updateAvatar(id, body, caller.id);
+    return noContentResponse();
+  }
+
+  // JSON, like every other endpoint — not raw image bytes — so the existing
+  // JSON-only ApiClient on the desktop side needs no new capability just
+  // for this one route.
+  Future<Response> getAvatar(Request request, String id) async {
+    requireAuthUser(request); // any authenticated staff may view an avatar
+    final avatar = await _service.getAvatar(id);
+    if (avatar == null) {
+      throw ApiError.notFound('No avatar set for this user');
+    }
+    return okResponse({
+      'image_base64': base64Encode(avatar['bytes'] as List<int>),
+      'content_type': avatar['content_type'],
+    });
   }
 
   Future<Response> changeRole(Request request, String id) async {
