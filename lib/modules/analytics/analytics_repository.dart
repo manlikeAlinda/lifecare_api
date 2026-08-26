@@ -82,15 +82,28 @@ class AnalyticsRepository {
         'WHERE created_at >= :from AND created_at <= :to',
         {'from': monthStart, 'to': now},
       ),
+      // Net revenue = deductions minus reversals in the period. A deleted or
+      // downward-edited encounter (EncounterRepository.delete/update) never
+      // removes the original 'deduction' row — it inserts a compensating
+      // 'reversal' row alongside it — so summing 'deduction' alone counts a
+      // deleted visit's charge forever. Reversal is netted against the
+      // SAME period it lands in (not retroactively against the original
+      // deduction's period), matching normal point-of-sale accounting: a
+      // same-day delete zeroes out today's figure; a delete on a later day
+      // reduces that later day's figure instead of rewriting history.
       _sum(
-        "SELECT COALESCE(SUM(amount_shillings), 0) as val FROM wallet_ledger "
-        "WHERE type = 'deduction' AND status = 'posted' "
+        "SELECT COALESCE(SUM(CASE WHEN type = 'deduction' THEN amount_shillings "
+        "WHEN type = 'reversal' THEN -amount_shillings ELSE 0 END), 0) as val "
+        "FROM wallet_ledger "
+        "WHERE type IN ('deduction', 'reversal') AND status = 'posted' "
         'AND created_at >= :from AND created_at < :to',
         {'from': todayStart, 'to': todayEnd},
       ),
       _sum(
-        "SELECT COALESCE(SUM(amount_shillings), 0) as val FROM wallet_ledger "
-        "WHERE type = 'deduction' AND status = 'posted' "
+        "SELECT COALESCE(SUM(CASE WHEN type = 'deduction' THEN amount_shillings "
+        "WHEN type = 'reversal' THEN -amount_shillings ELSE 0 END), 0) as val "
+        "FROM wallet_ledger "
+        "WHERE type IN ('deduction', 'reversal') AND status = 'posted' "
         'AND created_at >= :from AND created_at <= :to',
         {'from': monthStart, 'to': now},
       ),
