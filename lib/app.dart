@@ -292,6 +292,15 @@ Handler buildApp() {
         final id = req.params['id']!;
         final limit = parseLimit(req);
         final offset = parseOffset(req);
+        // The desktop client calls this same route for two different
+        // things: GET /v1/patients/<primaryId>/encounters for a primary's
+        // full family history (id = patient_id, matches every encounter
+        // billed to them including their beneficiaries'), and
+        // GET /v1/patients/<beneficiaryId>/encounters?dependent=true for
+        // one beneficiary's own report (id = dependent_id — a beneficiary's
+        // encounters always carry the PRIMARY's patient_id for billing, so
+        // filtering by patientId: id here would silently return nothing).
+        final isDependentReport = queryParam(req, 'dependent') == 'true';
         // Staff/admin (this route's `auth` pipeline) intentionally see the
         // unredacted reason regardless of reason_hidden — the spec's
         // redaction requirement is about protecting a beneficiary from the
@@ -300,7 +309,8 @@ Handler buildApp() {
         // /v1/patient/beneficiaries/<id>/visits (patientAuth2, the
         // primary's own session) pass asPrimaryView: true.
         final (encounters, total) = await encounterService.listEncounters(
-          patientId: id,
+          patientId: isDependentReport ? null : id,
+          dependentId: isDependentReport ? id : null,
           limit: limit,
           offset: offset,
         );
