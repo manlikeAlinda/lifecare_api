@@ -95,11 +95,19 @@ class AnalyticsRepository {
         {'from': monthStart, 'to': now},
       ),
       _count(
+        // deleted_at IS NULL — a soft-deleted beneficiary (softDeleteSubPatient
+        // only sets deleted_at, never flips is_active) must not still count
+        // as an active account.
         'SELECT COUNT(*) as val FROM patients '
-        'WHERE created_at >= :from AND created_at <= :to AND is_active = 1',
+        'WHERE created_at >= :from AND created_at <= :to '
+        'AND is_active = 1 AND deleted_at IS NULL',
         {'from': monthStart, 'to': now},
       ),
-      _count('SELECT COUNT(*) as val FROM patients WHERE is_active = 1', {}),
+      _count(
+        'SELECT COUNT(*) as val FROM patients '
+        'WHERE is_active = 1 AND deleted_at IS NULL',
+        {},
+      ),
       _count(
         "SELECT COUNT(*) as val FROM encounters WHERE status != 'cancelled'",
         {},
@@ -108,6 +116,15 @@ class AnalyticsRepository {
         'SELECT COUNT(DISTINCT user_id) as val FROM sessions '
         'WHERE revoked_at IS NULL AND expires_at > :now',
         {'now': now},
+      ),
+      // All-time outstanding balance: computed here (not fetched client-side
+      // from GET /v1/wallets, which is paginated to 20 by default) so the
+      // dashboard's "Outstanding — ALL TIME" figure is a true total rather
+      // than a sum over whatever page of wallets happened to load first.
+      _sum(
+        "SELECT COALESCE(SUM(-balance_shillings), 0) as val FROM wallets "
+        "WHERE balance_shillings < 0 AND status NOT IN ('CLOSED', 'BLOCKED')",
+        {},
       ),
     ]);
 
@@ -123,6 +140,7 @@ class AnalyticsRepository {
       'active_patients':         results[6],
       'open_encounters':         results[7],
       'active_staff':            results[8],
+      'outstanding_shillings':   results[9],
     };
   }
 
