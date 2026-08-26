@@ -15,8 +15,8 @@ class WalletRepository {
   // ── DB column reality ─────────────────────────────────────────────────────
   // wallets:      wallet_id (PK), primary_patient_id, balance_minor,
   //               balance_shillings, status, created_at, last_activity_at
-  // wallet_ledger: ledger_id (PK), wallet_id, type, status,
-  //               amount_shillings, failure_reason, created_at
+  // wallet_ledger: ledger_id (PK), wallet_id, encounter_id (migration 035),
+  //               type, status, amount_shillings, failure_reason, created_at
   // ─────────────────────────────────────────────────────────────────────────
 
   // Wallet SELECT — aliases wallet_id→id, patient_id coalesced from both
@@ -83,19 +83,34 @@ class WalletRepository {
 
   // ── Ledger ────────────────────────────────────────────────────────────────
 
+  // encounter_id is nullable (most ledger rows — deposits, standalone
+  // checkouts — have none), so the HEX/CONCAT below naturally yields NULL
+  // rather than a malformed string when it's absent; no CASE needed.
   static const _ledgerSelect =
       'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(ledger_id),1,8),'-',SUBSTR(HEX(ledger_id),9,4),'-',"
-      "SUBSTR(HEX(ledger_id),13,4),'-',SUBSTR(HEX(ledger_id),17,4),'-',"
-      "SUBSTR(HEX(ledger_id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
-      "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
-      "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
-      "LOWER(CONCAT(SUBSTR(HEX(initiated_by),1,8),'-',SUBSTR(HEX(initiated_by),9,4),'-',"
-      "SUBSTR(HEX(initiated_by),13,4),'-',SUBSTR(HEX(initiated_by),17,4),'-',"
-      "SUBSTR(HEX(initiated_by),21))) AS initiated_by, "
-      'type, amount_shillings, status, failure_reason, created_at '
-      'FROM wallet_ledger';
+      "LOWER(CONCAT(SUBSTR(HEX(wl.ledger_id),1,8),'-',SUBSTR(HEX(wl.ledger_id),9,4),'-',"
+      "SUBSTR(HEX(wl.ledger_id),13,4),'-',SUBSTR(HEX(wl.ledger_id),17,4),'-',"
+      "SUBSTR(HEX(wl.ledger_id),21))) AS id, "
+      "LOWER(CONCAT(SUBSTR(HEX(wl.wallet_id),1,8),'-',SUBSTR(HEX(wl.wallet_id),9,4),'-',"
+      "SUBSTR(HEX(wl.wallet_id),13,4),'-',SUBSTR(HEX(wl.wallet_id),17,4),'-',"
+      "SUBSTR(HEX(wl.wallet_id),21))) AS wallet_id, "
+      "LOWER(CONCAT(SUBSTR(HEX(wl.initiated_by),1,8),'-',SUBSTR(HEX(wl.initiated_by),9,4),'-',"
+      "SUBSTR(HEX(wl.initiated_by),13,4),'-',SUBSTR(HEX(wl.initiated_by),17,4),'-',"
+      "SUBSTR(HEX(wl.initiated_by),21))) AS initiated_by, "
+      "LOWER(CONCAT(SUBSTR(HEX(wl.encounter_id),1,8),'-',SUBSTR(HEX(wl.encounter_id),9,4),'-',"
+      "SUBSTR(HEX(wl.encounter_id),13,4),'-',SUBSTR(HEX(wl.encounter_id),17,4),'-',"
+      "SUBSTR(HEX(wl.encounter_id),21))) AS encounter_id, "
+      'wl.type, wl.amount_shillings, wl.status, wl.failure_reason, wl.created_at, '
+      // Deliberately NOT selecting e.reason here — that's the beneficiary-
+      // owned, redaction-gated field (see encounter_repository._redact).
+      // This endpoint has no asPrimaryView/caller-role plumbing, so pulling
+      // reason through unredacted would leak a hidden reason via Activity
+      // even when /patient/visits correctly withholds it. service_type is
+      // a coarse category (e.g. "General", "Lab"), not the clinical note —
+      // safe to always show.
+      'e.reference_number AS encounter_reference, e.service_type AS encounter_service_type '
+      'FROM wallet_ledger wl '
+      'LEFT JOIN encounters e ON e.encounter_id = wl.encounter_id';
 
   /// Returns all ledger entries across all wallets, most recent first.
   Future<(List<Map<String, dynamic>>, int)> findAllLedger({
@@ -108,27 +123,27 @@ class WalletRepository {
     final conditions = <String>[];
     final params = <String, dynamic>{'limit': limit, 'offset': offset};
     if (type != null) {
-      conditions.add('type = :type');
+      conditions.add('wl.type = :type');
       params['type'] = type;
     }
     if (from != null) {
-      conditions.add('created_at >= :from');
+      conditions.add('wl.created_at >= :from');
       params['from'] = from;
     }
     if (to != null) {
-      conditions.add('created_at <= :to');
+      conditions.add('wl.created_at <= :to');
       params['to'] = to;
     }
     final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
 
     final countResult = await _pool.execute(
-      'SELECT COUNT(*) as total FROM wallet_ledger $where',
+      'SELECT COUNT(*) as total FROM wallet_ledger wl $where',
       params,
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      '$_ledgerSelect $where ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+      '$_ledgerSelect $where ORDER BY wl.created_at DESC LIMIT :limit OFFSET :offset',
       params,
     );
     return (result.rows.map(_rowToMap).toList(), total);
@@ -144,21 +159,21 @@ class WalletRepository {
     int offset = 0,
     String? initiatedByFilter,
   }) async {
-    final where = "WHERE wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
-        "${initiatedByFilter != null ? "AND initiated_by = UNHEX(REPLACE(:initiatedBy, '-', ''))" : ''}";
+    final where = "WHERE wl.wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
+        "${initiatedByFilter != null ? "AND wl.initiated_by = UNHEX(REPLACE(:initiatedBy, '-', ''))" : ''}";
     final params = <String, dynamic>{
       'walletId': walletId,
       if (initiatedByFilter != null) 'initiatedBy': initiatedByFilter,
     };
 
     final countResult = await _pool.execute(
-      'SELECT COUNT(*) as total FROM wallet_ledger $where',
+      'SELECT COUNT(*) as total FROM wallet_ledger wl $where',
       params,
     );
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      '$_ledgerSelect $where ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+      '$_ledgerSelect $where ORDER BY wl.created_at DESC LIMIT :limit OFFSET :offset',
       {...params, 'limit': limit, 'offset': offset},
     );
     return (result.rows.map(_rowToMap).toList(), total);

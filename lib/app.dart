@@ -650,16 +650,19 @@ Handler buildApp() {
       final limit = (int.tryParse(qp['limit'] ?? '20') ?? 20).clamp(1, 100);
       final offset = int.tryParse(qp['offset'] ?? '0') ?? 0;
 
-      // Visits are private per-patient: a beneficiary sees only visits
-      // recorded for them, and the primary holder sees only their own —
-      // neither sees the other's, symmetrically.
+      // A beneficiary sees only visits recorded for them — never the
+      // primary's or a sibling's. The primary sees every visit on the
+      // family account (their own + every beneficiary's): a beneficiary
+      // may hide the `reason` on their own visit (never the whole entry),
+      // which asPrimaryView enforces via redaction below — it does not
+      // hide the visit from this list.
       final requester = await patientRepo.findById(patientUser.id);
       final isBeneficiary = isBeneficiaryRow(requester);
 
       final (encounters, total) = await encounterService.listEncounters(
         patientId: isBeneficiary ? null : patientUser.id,
         dependentId: isBeneficiary ? patientUser.id : null,
-        excludeDependents: !isBeneficiary,
+        excludeDependents: false,
         asPrimaryView: !isBeneficiary,
         limit: limit,
         offset: offset,
@@ -725,14 +728,21 @@ Handler buildApp() {
 
       final transactions = entries.map((e) {
         final type = (e['type'] as String? ?? '').toLowerCase();
+        final encounterRef = e['encounter_reference'] as String?;
         return {
           'txId':           e['id'],
           'txType':         type.toUpperCase(),
-          'referenceValue': type,
+          // Falls back to the raw type (deposit/deduction/reversal/…) when
+          // there's no linked encounter — e.g. deposits, standalone checkouts.
+          'referenceValue': (encounterRef != null && encounterRef.isNotEmpty) ? encounterRef : type,
           'totalMinor':     (((e['amount_shillings'] as num?) ?? 0) * 100).toInt(),
           'currency':       'UGX',
           'status':         (e['status'] as String?)?.toUpperCase() ?? 'POSTED',
           'createdAt':      e['created_at']?.toString() ?? '',
+          // Null when this entry has no linked visit (deposit, standalone
+          // checkout, or the source encounter has since been deleted).
+          'encounterId':      e['encounter_id'],
+          'encounterService': e['encounter_service_type'],
         };
       }).toList();
 
@@ -819,15 +829,23 @@ Handler buildApp() {
     '/v1/patient/visits/<id>',
     Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
       final patientUser = requirePatientUser(req);
-      final encounter = await encounterService.getEncounter(req.params['id']!);
       final requester = await patientRepo.findById(patientUser.id);
       final isBeneficiary = isBeneficiaryRow(requester);
+      // asPrimaryView must be resolved before the fetch — it drives the
+      // reason redaction inside getEncounter, same as the two list
+      // endpoints. Passing it late would leak an unredacted reason.
+      final encounter = await encounterService.getEncounter(
+        req.params['id']!,
+        asPrimaryView: !isBeneficiary,
+      );
       // Ownership: a beneficiary only owns visits recorded FOR them
-      // (dependent_id); the primary only owns their own (patient_id match,
-      // dependent_id null). Fail-fast 403 — never a silent filter.
+      // (dependent_id). The primary owns every visit on the family account —
+      // their own AND every beneficiary's (matching /patient/visits' list
+      // view) — so no dependent_id restriction here. Fail-fast 403 — never
+      // a silent filter.
       final owns = isBeneficiary
           ? encounter['dependent_id'] == patientUser.id
-          : encounter['patient_id'] == patientUser.id && encounter['dependent_id'] == null;
+          : encounter['patient_id'] == patientUser.id;
       if (!owns) throw ApiError.forbidden();
       return okResponse(encounter);
     }),

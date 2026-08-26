@@ -334,14 +334,18 @@ class EncounterRepository {
         );
       }
 
-      // 4. Wallet ledger deduction.
+      // 4. Wallet ledger deduction — encounter_id links this entry back to
+      // the visit that caused it (migration 035), so the transaction detail
+      // screen can show what the money was for.
       await conn.execute(
-        'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, encounter_id, type, amount_shillings) '
         "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), "
-        "UNHEX(REPLACE(:walletId, '-', '')), 'deduction', :amount)",
+        "UNHEX(REPLACE(:walletId, '-', '')), "
+        "UNHEX(REPLACE(:encounterId, '-', '')), 'deduction', :amount)",
         {
           'ledgerId': ledgerEntryId,
           'walletId': walletId,
+          'encounterId': encounterId,
           'amount': totalCostInt,
         },
       );
@@ -486,11 +490,13 @@ class EncounterRepository {
           final deltaInt = delta.round().abs();
           final ledgerType = delta > 0 ? 'deduction' : 'reversal';
           await conn.execute(
-            'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
-            "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(REPLACE(:walletId, '-', '')), :type, :amount)",
+            'INSERT INTO wallet_ledger (ledger_id, wallet_id, encounter_id, type, amount_shillings) '
+            "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(REPLACE(:walletId, '-', '')), "
+            "UNHEX(REPLACE(:encounterId, '-', '')), :type, :amount)",
             {
               'ledgerId': generateUuid(),
               'walletId': walletId,
+              'encounterId': id,
               'type': ledgerType,
               'amount': deltaInt,
             },
@@ -552,11 +558,13 @@ class EncounterRepository {
       // 1. Reverse wallet ledger + balance if a wallet exists and cost > 0.
       if (walletId != null && totalCost > 0) {
         await conn.execute(
-          'INSERT INTO wallet_ledger (ledger_id, wallet_id, type, amount_shillings) '
-          "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(REPLACE(:walletId, '-', '')), 'reversal', :amount)",
+          'INSERT INTO wallet_ledger (ledger_id, wallet_id, encounter_id, type, amount_shillings) '
+          "VALUES (UNHEX(REPLACE(:ledgerId, '-', '')), UNHEX(REPLACE(:walletId, '-', '')), "
+          "UNHEX(REPLACE(:encounterId, '-', '')), 'reversal', :amount)",
           {
             'ledgerId': generateUuid(),
             'walletId': walletId,
+            'encounterId': id,
             'amount': totalCost,
           },
         );
