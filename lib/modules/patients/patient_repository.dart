@@ -34,6 +34,27 @@ class PatientRepository {
       '$_primaryAccountUuid AS primary_account_id '
       'FROM patients';
 
+  /// Fetches + decrypts email_enc (the only storage for email — there is no
+  /// plaintext column, unlike phone/national_id) in a separate query rather
+  /// than adding it to [_selectFields], so findAll/findSubPatients/
+  /// findByPatientCode — none of which display email — never carry raw
+  /// ciphertext through to a response. Only [findById] calls this; it's the
+  /// single-record lookup behind GET /v1/patient/me and the self-service
+  /// profile update below.
+  Future<Map<String, dynamic>> _withDecryptedEmail(
+    Map<String, dynamic> row,
+  ) async {
+    final id = row['id'] as String;
+    final result = await _pool.execute(
+      "SELECT email_enc FROM patients WHERE patient_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
+      {'id': id},
+    );
+    final emailEnc =
+        result.rows.isEmpty ? null : result.rows.first.assoc()['email_enc'];
+    row['email'] = await _pii.tryDecrypt(emailEnc) ?? '';
+    return row;
+  }
+
   // ── Primary-account list (excludes sub-patients) ───────────────────────────
 
   Future<(List<Map<String, dynamic>>, int)> findAll({
@@ -82,7 +103,7 @@ class PatientRepository {
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
-    return _rowToMap(result.rows.first);
+    return _withDecryptedEmail(_rowToMap(result.rows.first));
   }
 
   Future<Map<String, dynamic>?> findByPatientCode(String code) async {
@@ -263,6 +284,54 @@ class PatientRepository {
       if (enc != null) {
         setClauseParts.add('nat_id_enc = :nationalIdEnc');
         params['nationalIdEnc'] = enc;
+      }
+    }
+
+    if (setClauseParts.isEmpty) return findById(id);
+
+    await _pool.execute(
+      "UPDATE patients SET ${setClauseParts.join(', ')} "
+      "WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
+      params,
+    );
+
+    return findById(id);
+  }
+
+  /// Patient self-service profile update — deliberately NOT a wrapper around
+  /// [update] above, which also accepts account_type/is_active/relationship/
+  /// is_minor. A patient must never be able to set those on themselves; this
+  /// method only ever touches full_name/phone_e164/email, and skips any
+  /// field left null (an omitted field is not the same as clearing it).
+  /// email has no plaintext column — it's encrypt-only, matching the schema
+  /// (see _withDecryptedEmail's comment on why the read side is separate).
+  Future<Map<String, dynamic>?> updateOwnProfile(
+    String id, {
+    String? fullName,
+    String? phone,
+    String? email,
+  }) async {
+    final setClauseParts = <String>[];
+    final params = <String, dynamic>{'id': id};
+
+    if (fullName != null && fullName.isNotEmpty) {
+      setClauseParts.add('full_name = :fullName');
+      params['fullName'] = fullName;
+    }
+    if (phone != null && phone.isNotEmpty) {
+      setClauseParts.add('phone_e164 = :phone');
+      params['phone'] = phone;
+      final enc = await _pii.encrypt(phone);
+      if (enc != null) {
+        setClauseParts.add('phone_enc = :phoneEnc');
+        params['phoneEnc'] = enc;
+      }
+    }
+    if (email != null && email.isNotEmpty) {
+      final enc = await _pii.encrypt(email);
+      if (enc != null) {
+        setClauseParts.add('email_enc = :emailEnc');
+        params['emailEnc'] = enc;
       }
     }
 

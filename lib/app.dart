@@ -642,6 +642,25 @@ Handler buildApp() {
     }),
   );
 
+  // Self-service profile edit — deliberately routed to updateOwnProfile,
+  // never the staff-facing update(), so a patient can't set account_type/
+  // is_active/relationship/is_minor on themselves via this endpoint.
+  router.patch(
+    '/v1/patient/me',
+    Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
+      final patientUser = requirePatientUser(req);
+      final body = await parseJsonBody(req);
+      final patient = await patientRepo.updateOwnProfile(
+        patientUser.id,
+        fullName: body['fullName'] as String?,
+        phone: body['phone'] as String?,
+        email: body['email'] as String?,
+      );
+      if (patient == null) throw ApiError.notFound('Patient not found');
+      return okResponse(patient);
+    }),
+  );
+
   router.get(
     '/v1/patient/visits',
     Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
