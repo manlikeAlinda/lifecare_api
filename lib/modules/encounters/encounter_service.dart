@@ -81,15 +81,17 @@ class EncounterService {
 
     final services = await _pricing.resolveServices(rawServices);
     final medications = await _pricing.resolveDrugs(rawMedications);
-    final total = EncounterPricingResolver.sumTotal(services) +
+    final rawTotal = EncounterPricingResolver.sumTotal(services) +
         EncounterPricingResolver.sumTotal(medications);
+    final discount = _resolveDiscount(data['discount_shillings'], rawTotal);
 
     return _repo.create(
       encounterId: generateUuid(),
       patientId: patientId,
       dependentId: dependentId,
       walletId: wallet['id'] as String,
-      totalCost: total,
+      totalCost: rawTotal - discount,
+      discountShillings: discount,
       createdBy: createdBy,
       services: services,
       medications: medications,
@@ -97,6 +99,21 @@ class EncounterService {
       serviceType: data['service_type'] as String?,
       visitedAt: data['visited_at'] as String?,
     );
+  }
+
+  /// Validates an optional client-sent discount against the server-resolved
+  /// visit total — pricing itself is never taken from the client (see
+  /// EncounterPricingResolver), so this is the one place a discount is
+  /// allowed to shave the total, and only within [0, rawTotal].
+  double _resolveDiscount(dynamic raw, double rawTotal) {
+    if (raw == null) return 0;
+    final discount = (raw as num).toDouble();
+    if (discount < 0 || discount > rawTotal) {
+      throw ApiError.businessRule(
+        'Discount must be between 0 and the visit total',
+      );
+    }
+    return discount;
   }
 
   Future<Map<String, dynamic>> updateEncounter(
@@ -118,6 +135,7 @@ class EncounterService {
     List<Map<String, dynamic>>? newServices;
     List<Map<String, dynamic>>? newMedications;
     double? newTotal;
+    double? newDiscount;
 
     if (hasLines) {
       final rawServices = (data['services'] as List? ?? []).cast<Map<String, dynamic>>();
@@ -127,8 +145,10 @@ class EncounterService {
 
       newServices = await _pricing.resolveServices(rawServices);
       newMedications = await _pricing.resolveDrugs(rawMedications);
-      newTotal = EncounterPricingResolver.sumTotal(newServices) +
+      final newRawTotal = EncounterPricingResolver.sumTotal(newServices) +
           EncounterPricingResolver.sumTotal(newMedications);
+      newDiscount = _resolveDiscount(data['discount_shillings'], newRawTotal);
+      newTotal = newRawTotal - newDiscount;
     }
 
     // Resolve the wallet the same way encounter creation does — via
@@ -149,6 +169,7 @@ class EncounterService {
       newServices: newServices,
       newMedications: newMedications,
       newTotal: newTotal,
+      newDiscount: newDiscount,
       oldTotal: (encounter['total_cost'] as num?)?.toDouble() ?? 0,
       walletId: walletId,
     );

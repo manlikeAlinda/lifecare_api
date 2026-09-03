@@ -99,7 +99,7 @@ class EncounterRepository {
 
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
-      'e.status, e.total_cost, e.created_at, e.reason, e.reason_hidden, '
+      'e.status, e.total_cost, e.discount_shillings, e.created_at, e.reason, e.reason_hidden, '
       'p.full_name AS patient_name, p.patient_code, '
       'dep.full_name AS dependent_name, dep.patient_code AS dependent_code, '
       'dep.is_minor AS dependent_is_minor '
@@ -130,7 +130,7 @@ class EncounterRepository {
   Future<Map<String, dynamic>?> findById(String id, {bool asPrimaryView = false}) async {
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
-      'e.status, e.total_cost, e.created_at, e.reason, e.reason_hidden, '
+      'e.status, e.total_cost, e.discount_shillings, e.created_at, e.reason, e.reason_hidden, '
       'p.full_name AS patient_name, p.patient_code, '
       'dep.full_name AS dependent_name, dep.patient_code AS dependent_code, '
       'dep.is_minor AS dependent_is_minor '
@@ -264,6 +264,7 @@ class EncounterRepository {
     String? dependentId,
     required String walletId,
     required double totalCost,
+    double discountShillings = 0,
     required String createdBy,
     required List<Map<String, dynamic>> services,
     required List<Map<String, dynamic>> medications,
@@ -279,10 +280,10 @@ class EncounterRepository {
       await conn.execute(
         'INSERT INTO encounters '
         '(encounter_id, patient_id, dependent_id, reference_number, visited_at, '
-        'service_type, total_cost) '
+        'service_type, total_cost, discount_shillings) '
         "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), "
         "${dependentId != null ? "UNHEX(REPLACE(:dependentId, '-', ''))" : 'NULL'}, "
-        ':referenceNumber, :visitedAt, :serviceType, :totalCost)',
+        ':referenceNumber, :visitedAt, :serviceType, :totalCost, :discountShillings)',
         {
           'id': encounterId,
           'patientId': patientId,
@@ -291,6 +292,7 @@ class EncounterRepository {
           'visitedAt': visitedAt ?? _nowString(),
           'serviceType': serviceType ?? 'General',
           'totalCost': totalCost,
+          'discountShillings': discountShillings.round(),
         },
       );
 
@@ -391,6 +393,7 @@ class EncounterRepository {
     List<Map<String, dynamic>>? newServices,
     List<Map<String, dynamic>>? newMedications,
     double? newTotal,
+    double? newDiscount,
     double oldTotal = 0,
     String? walletId,
   }) async {
@@ -413,10 +416,16 @@ class EncounterRepository {
       }
     }
 
-    // If child lines are being replaced, also update total_cost.
+    // If child lines are being replaced, also update total_cost/discount —
+    // always set together by EncounterService.updateEncounter, which
+    // recomputes both from the same server-resolved line prices.
     if (newTotal != null) {
       setClauses.add('total_cost = :newTotal');
       params['newTotal'] = newTotal;
+    }
+    if (newDiscount != null) {
+      setClauses.add('discount_shillings = :newDiscount');
+      params['newDiscount'] = newDiscount.round();
     }
 
     await _pool.transactional((conn) async {

@@ -44,6 +44,7 @@ class EncounterHandler {
       ..isListOfObjects('services')
       ..isListOfObjects('drug_lines')
       ..isListOfObjects('medications')
+      ..currencyAmount('discount_shillings')
       ..throwIfInvalid();
 
     // Require at least one service or drug line so we never create an
@@ -73,6 +74,7 @@ class EncounterHandler {
       ..isListOfObjects('services')
       ..isListOfObjects('drug_lines')
       ..isListOfObjects('medications')
+      ..currencyAmount('discount_shillings')
       ..throwIfInvalid();
 
     final encounter = await _service.updateEncounter(id, body, caller.id);
