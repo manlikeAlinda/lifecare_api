@@ -19,6 +19,8 @@ import 'package:lifecare_api/modules/users/user_service.dart';
 import 'package:lifecare_api/modules/patients/patient_handler.dart';
 import 'package:lifecare_api/modules/patients/patient_repository.dart';
 import 'package:lifecare_api/modules/patients/patient_service.dart';
+import 'package:lifecare_api/modules/patients/account_statement_handler.dart';
+import 'package:lifecare_api/modules/patients/account_statement_service.dart';
 import 'package:lifecare_api/modules/wallets/wallet_handler.dart';
 import 'package:lifecare_api/modules/wallets/wallet_repository.dart';
 import 'package:lifecare_api/modules/wallets/wallet_service.dart';
@@ -85,6 +87,8 @@ Handler buildApp() {
   final patientService = PatientService(patientRepo);
   final walletService = WalletService(walletRepo);
   final encounterService = EncounterService(encounterRepo, walletRepo, catalogRepo);
+  final accountStatementService =
+      AccountStatementService(walletRepo, encounterRepo, patientRepo);
   final catalogService = CatalogService(catalogRepo);
   final analyticsService = AnalyticsService(analyticsRepo);
   final emailService = EmailService();
@@ -107,6 +111,7 @@ Handler buildApp() {
   final patientHandler = PatientHandler(patientService);
   final walletHandler = WalletHandler(walletService);
   final encounterHandler = EncounterHandler(encounterService);
+  final accountStatementHandler = AccountStatementHandler(accountStatementService);
   final catalogHandler = CatalogHandler(catalogService);
   final analyticsHandler = AnalyticsHandler(analyticsService);
   final patientAuthHandler = PatientAuthHandler(patientAuthService);
@@ -283,6 +288,13 @@ Handler buildApp() {
         final wallet = await walletService.getWalletByPatient(req.params['id']!);
         return okResponse(wallet);
       },
+    ),
+  );
+  // Matrix row: "Generate full account invoice/statement" — admin only.
+  router.get(
+    '/v1/patients/<id>/invoice',
+    adminOnly.addHandler(
+      (Request req) => accountStatementHandler.getById(req, req.params['id']!),
     ),
   );
   router.get(

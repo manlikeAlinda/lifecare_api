@@ -184,6 +184,20 @@ class WalletRepository {
     return (result.rows.map(_rowToMap).toList(), total);
   }
 
+  /// Full, unpaginated ledger history for a wallet in chronological (ASC)
+  /// order — used by the account statement (Module 5), which needs to
+  /// reconstruct a running balance across every entry, not a page of them.
+  Future<List<Map<String, dynamic>>> getAllLedgerForStatement(
+    String walletId,
+  ) async {
+    final result = await _pool.execute(
+      "$_ledgerSelect WHERE wl.wallet_id = UNHEX(REPLACE(:walletId, '-', '')) "
+      'ORDER BY wl.created_at ASC',
+      {'walletId': walletId},
+    );
+    return result.rows.map(_rowToMap).toList();
+  }
+
   // ── Internal helper: append a ledger row + update denormalised balance ────
   // Used by both createTransaction (standalone) and encounter_repository
   // (inside its own transaction, via the conn param).

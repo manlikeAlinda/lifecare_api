@@ -37,6 +37,7 @@ Map<String, dynamic> rowToMap(ResultSetRow row) {
     'amount_shillings',
     // encounters / services / medications
     'total_cost',
+    'discount_shillings',
     'price',
     'unit_price',
     'total_price',
