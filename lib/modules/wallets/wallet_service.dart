@@ -49,6 +49,8 @@ class WalletService {
     return _repo.findDependentsByWalletId(walletId);
   }
 
+  static const _adjustmentScopedAccountTypes = {'corporate', 'remittance'};
+
   Future<Map<String, dynamic>> createTransaction(
     String walletId,
     Map<String, dynamic> data,
@@ -65,12 +67,38 @@ class WalletService {
       );
     }
 
+    final notes = (data['notes'] as String?)?.trim();
+
+    if (type == 'adjustment') {
+      // Matrix row: "Edit account balances" — a direct balance edit is only
+      // permitted on corporate/bank-remittance accounts, never an
+      // individual/family client's wallet. This endpoint is already
+      // adminOnly at the route; this is the account-type scoping on top.
+      final accountType = wallet['account_type'] as String?;
+      if (accountType == null ||
+          !_adjustmentScopedAccountTypes.contains(accountType)) {
+        throw ApiError.forbidden(
+          'Balance adjustments are only permitted on corporate or remittance accounts',
+        );
+      }
+      // No balance mutation without a corresponding, reasoned transaction row.
+      if (notes == null || notes.isEmpty) {
+        throw ApiError.validationError(
+          'A reason is required for balance adjustments',
+        );
+      }
+      final amount = (data['amount'] as num?)?.toDouble() ?? 0;
+      if (amount == 0) {
+        throw ApiError.validationError('Adjustment amount must not be zero');
+      }
+    }
+
     return _repo.createTransaction(
       walletId: walletId,
       transactionType: type,
       amount: (data['amount'] as num).toDouble(),
       createdBy: createdBy,
-      notes: data['notes'] as String?,
+      notes: notes,
     );
   }
 }

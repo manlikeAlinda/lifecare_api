@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/audit/audit_writer.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
@@ -21,19 +22,23 @@ class WalletRepository {
 
   // Wallet SELECT — aliases wallet_id→id, patient_id coalesced from both
   // primary_patient_id and patient_id columns (schema has both).
+  // account_type is joined from patients (via the same coalesced owner id)
+  // so WalletService can scope admin balance adjustments to corporate/
+  // remittance accounts without a second query.
   static const _walletSelect =
       'SELECT '
-      "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
-      "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
-      "SUBSTR(HEX(wallet_id),21))) AS id, "
-      "LOWER(CONCAT(SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),1,8),'-',"
-      "SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),9,4),'-',"
-      "SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),13,4),'-',"
-      "SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),17,4),'-',"
-      "SUBSTR(HEX(COALESCE(primary_patient_id, patient_id)),21))) AS patient_id, "
-      'balance_shillings AS balance, status, created_at, '
-      'last_activity_at AS updated_at '
-      'FROM wallets';
+      "LOWER(CONCAT(SUBSTR(HEX(w.wallet_id),1,8),'-',SUBSTR(HEX(w.wallet_id),9,4),'-',"
+      "SUBSTR(HEX(w.wallet_id),13,4),'-',SUBSTR(HEX(w.wallet_id),17,4),'-',"
+      "SUBSTR(HEX(w.wallet_id),21))) AS id, "
+      "LOWER(CONCAT(SUBSTR(HEX(COALESCE(w.primary_patient_id, w.patient_id)),1,8),'-',"
+      "SUBSTR(HEX(COALESCE(w.primary_patient_id, w.patient_id)),9,4),'-',"
+      "SUBSTR(HEX(COALESCE(w.primary_patient_id, w.patient_id)),13,4),'-',"
+      "SUBSTR(HEX(COALESCE(w.primary_patient_id, w.patient_id)),17,4),'-',"
+      "SUBSTR(HEX(COALESCE(w.primary_patient_id, w.patient_id)),21))) AS patient_id, "
+      'w.balance_shillings AS balance, w.status, w.created_at, '
+      'w.last_activity_at AS updated_at, p.account_type '
+      'FROM wallets w '
+      'LEFT JOIN patients p ON p.patient_id = COALESCE(w.primary_patient_id, w.patient_id)';
 
   Future<(List<Map<String, dynamic>>, int)> findAll({
     int limit = 20,
@@ -46,7 +51,7 @@ class WalletRepository {
     final total = int.parse(countResult.rows.first.assoc()['total'] ?? '0');
 
     final result = await _pool.execute(
-      '$_walletSelect ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+      '$_walletSelect ORDER BY w.created_at DESC LIMIT :limit OFFSET :offset',
       {'limit': limit, 'offset': offset},
     );
     return (result.rows.map(_rowToMap).toList(), total);
@@ -54,7 +59,7 @@ class WalletRepository {
 
   Future<Map<String, dynamic>?> findById(String id) async {
     final result = await _pool.execute(
-      "$_walletSelect WHERE wallet_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
+      "$_walletSelect WHERE w.wallet_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
@@ -70,7 +75,7 @@ class WalletRepository {
   Future<Map<String, dynamic>?> findByPatientId(String patientId) async {
     final result = await _pool.execute(
       '$_walletSelect '
-      "WHERE COALESCE(primary_patient_id, patient_id) = COALESCE("
+      "WHERE COALESCE(w.primary_patient_id, w.patient_id) = COALESCE("
       "  (SELECT primary_account_id FROM patients WHERE patient_id = UNHEX(REPLACE(:patientId, '-', ''))), "
       "  UNHEX(REPLACE(:patientId, '-', ''))"
       ') '
@@ -100,7 +105,7 @@ class WalletRepository {
       "LOWER(CONCAT(SUBSTR(HEX(wl.encounter_id),1,8),'-',SUBSTR(HEX(wl.encounter_id),9,4),'-',"
       "SUBSTR(HEX(wl.encounter_id),13,4),'-',SUBSTR(HEX(wl.encounter_id),17,4),'-',"
       "SUBSTR(HEX(wl.encounter_id),21))) AS encounter_id, "
-      'wl.type, wl.amount_shillings, wl.status, wl.failure_reason, wl.created_at, '
+      'wl.type, wl.amount_shillings, wl.status, wl.failure_reason, wl.reason, wl.created_at, '
       // Deliberately NOT selecting e.reason here — that's the beneficiary-
       // owned, redaction-gated field (see encounter_repository._redact).
       // This endpoint has no asPrimaryView/caller-role plumbing, so pulling
@@ -189,6 +194,7 @@ class WalletRepository {
     required String transactionType,
     required double amount,
     String? initiatedBy,
+    String? reason,
   }) async {
     final amountInt = amount.round();
     // Signed delta: positive types add, negative types subtract.
@@ -201,17 +207,18 @@ class WalletRepository {
     final delta = isCredit ? amountInt : -amountInt;
 
     await conn.execute(
-      'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, amount_shillings) '
+      'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, amount_shillings, reason) '
       "VALUES (UNHEX(REPLACE(:entryId, '-', '')), "
       "UNHEX(REPLACE(:walletId, '-', '')), "
       "${initiatedBy != null ? "UNHEX(REPLACE(:initiatedBy, '-', ''))" : 'NULL'}, "
-      ':type, :amount)',
+      ':type, :amount, :reason)',
       {
         'entryId': entryId,
         'walletId': walletId,
         if (initiatedBy != null) 'initiatedBy': initiatedBy,
         'type': transactionType,
         'amount': amountInt,
+        'reason': reason,
       },
     );
 
@@ -268,26 +275,19 @@ class WalletRepository {
         walletId: walletId,
         transactionType: transactionType,
         amount: amount,
+        reason: notes,
       );
 
-      // Audit log. action_type/entity_type/request_id are legacy NOT NULL
-      // columns with no default on the real table — see writeAudit's comment.
-      await conn.execute(
-        'INSERT INTO audit_log '
-        '(audit_id, user_id, actor_user_id, action_type, entity_type, request_id, '
-        ' action, target_type, target_id, details) '
-        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
-        "UNHEX(REPLACE(:actorId, '-', '')), "
-        "UNHEX(REPLACE(:actorId, '-', '')), "
-        ':action, :targetType, \'\', '
-        ':action, :targetType, '
-        "UNHEX(REPLACE(:targetId, '-', '')), '{}')",
-        {
-          'auditId': generateUuid(),
-          'actorId': createdBy,
-          'action': 'WALLET_TRANSACTION',
-          'targetType': 'wallet',
-          'targetId': walletId,
+      await writeAudit(
+        conn: conn,
+        actorId: createdBy,
+        action: 'WALLET_TRANSACTION',
+        targetType: 'wallet',
+        targetIdUuid: walletId,
+        after: {
+          'type': transactionType,
+          'amount': amount,
+          if (notes != null) 'reason': notes,
         },
       );
     });
@@ -301,7 +301,7 @@ class WalletRepository {
       "LOWER(CONCAT(SUBSTR(HEX(wallet_id),1,8),'-',SUBSTR(HEX(wallet_id),9,4),'-',"
       "SUBSTR(HEX(wallet_id),13,4),'-',SUBSTR(HEX(wallet_id),17,4),'-',"
       "SUBSTR(HEX(wallet_id),21))) AS wallet_id, "
-      'type, amount_shillings, status, failure_reason, created_at '
+      'type, amount_shillings, status, failure_reason, reason, created_at '
       'FROM wallet_ledger '
       "WHERE ledger_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': entryId},

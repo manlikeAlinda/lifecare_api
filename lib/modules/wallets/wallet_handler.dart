@@ -63,8 +63,17 @@ class WalletHandler {
     Validator(body)
       ..required('transaction_type')
       ..required('amount')
-      ..currencyAmount('amount')
       ..throwIfInvalid();
+
+    // 'adjustment' is the one bidirectional type — a signed amount encodes
+    // increase vs decrease (see WalletRepository.appendLedgerEntry, which
+    // already applies the sign as-is for credit types). Every other type's
+    // direction is implied by its name, so its amount must stay non-negative.
+    if (body['transaction_type'] != 'adjustment') {
+      Validator(body)
+        ..currencyAmount('amount')
+        ..throwIfInvalid();
+    }
 
     final entry = await _service.createTransaction(id, body, caller.id);
     return createdResponse(entry);
