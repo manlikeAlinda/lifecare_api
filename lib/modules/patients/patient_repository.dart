@@ -4,12 +4,14 @@ import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/services/pii_encryption_service.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
+import 'package:lifecare_api/modules/wallets/wallet_repository.dart';
 
 class PatientRepository {
   final MySQLConnectionPool _pool;
   final PiiEncryptionService _pii;
+  final WalletRepository _walletRepo;
 
-  PatientRepository(this._pool, this._pii);
+  PatientRepository(this._pool, this._pii, this._walletRepo);
 
   // Live DB columns (migration 024 applied):
   //   patient_id, patient_code, full_name, phone_e164, national_id_hash,
@@ -30,7 +32,7 @@ class PatientRepository {
   static const _selectFields =
       'SELECT $_uuidId, patient_code, full_name, phone_e164, national_id, '
       'is_active, created_at, account_type, relationship, is_minor, '
-      'login_access_status, '
+      'login_access_status, id_type, '
       '$_primaryAccountUuid AS primary_account_id '
       'FROM patients';
 
@@ -160,6 +162,12 @@ class PatientRepository {
     String? primaryAccountId,
     String? relationship,
     bool isMinor = false,
+    String idType = 'national_id',
+    // Non-null and > 0 only when onboarding a pre-existing client with a
+    // starting balance — recorded as an 'opening_balance' ledger entry,
+    // never a raw balance overwrite. Caller (PatientService) is
+    // responsible for admin-gating this before it reaches here.
+    double? openingBalanceShillings,
     // Server-computed override for callers with their own scheme (e.g.
     // sub-patients: {primaryCode}-{suffix}) — never client-suppliable.
     // Independent (non-dependent) patients always get the LC-XXX sequence.
@@ -185,10 +193,10 @@ class PatientRepository {
         await conn.execute(
           'INSERT INTO patients '
           '(patient_id, patient_code, full_name, phone_e164, phone_enc, '
-          ' national_id, nat_id_enc, account_type, primary_account_id, relationship, is_minor) '
+          ' national_id, nat_id_enc, account_type, primary_account_id, relationship, is_minor, id_type) '
           "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
           ':phone, :phoneEnc, :nationalId, :nationalIdEnc, :accountType, '
-          '$primaryIdExpr, :relationship, :isMinor)',
+          '$primaryIdExpr, :relationship, :isMinor, :idType)',
           {
             'id': id,
             'patientCode': patientCode,
@@ -200,6 +208,7 @@ class PatientRepository {
             'accountType': accountType,
             'relationship': relationship,
             'isMinor': isMinor ? 1 : 0,
+            'idType': idType,
           },
         );
 
@@ -209,6 +218,17 @@ class PatientRepository {
             "VALUES (UNHEX(REPLACE(:walletId, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), 0, 'ACTIVE')",
             {'walletId': walletId, 'patientId': id},
           );
+
+          if (openingBalanceShillings != null && openingBalanceShillings > 0) {
+            await _walletRepo.appendLedgerEntry(
+              conn: conn,
+              entryId: generateUuid(),
+              walletId: walletId,
+              transactionType: 'opening_balance',
+              amount: openingBalanceShillings,
+              initiatedBy: createdBy,
+            );
+          }
         }
       });
     } catch (e) {
@@ -263,6 +283,7 @@ class PatientRepository {
       'is_active',
       'relationship',
       'is_minor',
+      'id_type',
     ];
     final setClauseParts =
         fields.keys.where(allowed.contains).map((k) => '$k = :$k').toList();

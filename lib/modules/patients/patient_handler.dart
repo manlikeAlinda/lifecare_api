@@ -33,7 +33,8 @@ class PatientHandler {
       ..phoneE164('phone_e164')
       ..throwIfInvalid();
 
-    final patient = await _service.createPatient(body, caller.id);
+    final patient =
+        await _service.createPatient(body, caller.id, isAdmin: caller.isAdmin);
     return createdResponse(patient);
   }
 

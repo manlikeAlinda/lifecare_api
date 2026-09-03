@@ -36,13 +36,23 @@ class PatientService {
 
   Future<Map<String, dynamic>> createPatient(
     Map<String, dynamic> data,
-    String createdBy,
-  ) async {
+    String createdBy, {
+    required bool isAdmin,
+  }) async {
     final id = generateUuid();
     final walletId = generateUuid();
 
     final fullName = data['full_name'] as String? ??
         '${data['first_name'] ?? ''} ${data['last_name'] ?? ''}'.trim();
+
+    // Opening balance is admin-only (matrix row: "Add opening balance at
+    // account creation") — gated here in the service, not the route, since
+    // the route itself stays staff-accessible for the rest of the payload.
+    // Staff-submitted opening_balance is silently ignored rather than
+    // rejected, so the same create-account form works for both roles.
+    final openingBalance = isAdmin
+        ? (data['opening_balance'] as num?)?.toDouble()
+        : null;
 
     // patient_code is never accepted from the client — the repository
     // always assigns the next LC-XXX sequence value server-side.
@@ -54,6 +64,9 @@ class PatientService {
       phone: data['phone'] as String? ?? data['phone_e164'] as String?,
       nationalId: data['national_id'] as String?,
       accountType: data['account_type'] as String? ?? 'individual',
+      idType: data['id_type'] as String? ?? 'national_id',
+      openingBalanceShillings:
+          (openingBalance != null && openingBalance > 0) ? openingBalance : null,
     );
   }
 

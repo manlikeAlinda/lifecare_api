@@ -66,8 +66,8 @@ Handler buildApp() {
   final authRepo = AuthRepository(pool);
   final userRepo = UserRepository(pool);
   final piiEncryptionService = PiiEncryptionService();
-  final patientRepo = PatientRepository(pool, piiEncryptionService);
   final walletRepo = WalletRepository(pool);
+  final patientRepo = PatientRepository(pool, piiEncryptionService, walletRepo);
   final encounterRepo = EncounterRepository(pool);
   final catalogRepo = CatalogRepository(pool);
   final analyticsRepo = AnalyticsRepository(pool);

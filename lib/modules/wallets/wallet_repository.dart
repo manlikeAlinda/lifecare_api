@@ -192,8 +192,12 @@ class WalletRepository {
   }) async {
     final amountInt = amount.round();
     // Signed delta: positive types add, negative types subtract.
-    final isCredit =
-        ['deposit', 'refund', 'adjustment'].contains(transactionType);
+    // 'opening_balance' is written directly by PatientRepository.create()
+    // when onboarding a pre-existing client with a non-zero starting
+    // balance — never exposed through WalletService.createTransaction's
+    // validTypes, so it can't be injected onto an existing wallet later.
+    final isCredit = ['deposit', 'refund', 'adjustment', 'opening_balance']
+        .contains(transactionType);
     final delta = isCredit ? amountInt : -amountInt;
 
     await conn.execute(
