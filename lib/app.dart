@@ -331,6 +331,14 @@ Handler buildApp() {
     ),
   );
 
+  // Roster bulk import (Module 1) — corporate accounts only, admin-only.
+  router.post(
+    '/v1/patients/<id>/roster/bulk-import',
+    adminOnly.addHandler(
+      (Request req) => patientHandler.bulkImportRoster(req, req.params['id']!),
+    ),
+  );
+
   // Dependents
   router.get(
     '/v1/patients/<id>/dependents',

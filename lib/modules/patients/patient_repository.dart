@@ -185,31 +185,20 @@ class PatientRepository {
         final patientCode =
             patientCodeOverride ?? await _nextPatientCode(conn);
 
-        final primaryIdHex = primaryAccountId?.replaceAll('-', '');
-        final primaryIdExpr = primaryIdHex != null
-            ? "UNHEX('$primaryIdHex')"
-            : 'NULL';
-
-        await conn.execute(
-          'INSERT INTO patients '
-          '(patient_id, patient_code, full_name, phone_e164, phone_enc, '
-          ' national_id, nat_id_enc, account_type, primary_account_id, relationship, is_minor, id_type) '
-          "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
-          ':phone, :phoneEnc, :nationalId, :nationalIdEnc, :accountType, '
-          '$primaryIdExpr, :relationship, :isMinor, :idType)',
-          {
-            'id': id,
-            'patientCode': patientCode,
-            'fullName': fullName,
-            'phone': phone,
-            'phoneEnc': phoneEnc,
-            'nationalId': nationalId,
-            'nationalIdEnc': nationalIdEnc,
-            'accountType': accountType,
-            'relationship': relationship,
-            'isMinor': isMinor ? 1 : 0,
-            'idType': idType,
-          },
+        await _insertPatientRow(
+          conn,
+          id: id,
+          patientCode: patientCode,
+          fullName: fullName,
+          phone: phone,
+          phoneEnc: phoneEnc,
+          nationalId: nationalId,
+          nationalIdEnc: nationalIdEnc,
+          accountType: accountType,
+          primaryAccountId: primaryAccountId,
+          relationship: relationship,
+          isMinor: isMinor,
+          idType: idType,
         );
 
         if (walletId != null) {
@@ -262,6 +251,146 @@ class PatientRepository {
     }
 
     return (await findById(id))!;
+  }
+
+  /// The raw INSERT behind both [create] (wraps it in its own transaction)
+  /// and [bulkCreateSubPatients] (calls it once per row inside ONE shared
+  /// transaction) — factored out so a roster import can commit every row
+  /// atomically instead of one transaction per row.
+  Future<void> _insertPatientRow(
+    MySQLConnection conn, {
+    required String id,
+    required String patientCode,
+    required String fullName,
+    String? phone,
+    String? phoneEnc,
+    String? nationalId,
+    String? nationalIdEnc,
+    required String accountType,
+    String? primaryAccountId,
+    String? relationship,
+    bool isMinor = false,
+    String idType = 'national_id',
+  }) async {
+    final primaryIdHex = primaryAccountId?.replaceAll('-', '');
+    final primaryIdExpr = primaryIdHex != null ? "UNHEX('$primaryIdHex')" : 'NULL';
+
+    await conn.execute(
+      'INSERT INTO patients '
+      '(patient_id, patient_code, full_name, phone_e164, phone_enc, '
+      ' national_id, nat_id_enc, account_type, primary_account_id, relationship, is_minor, id_type) '
+      "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
+      ':phone, :phoneEnc, :nationalId, :nationalIdEnc, :accountType, '
+      '$primaryIdExpr, :relationship, :isMinor, :idType)',
+      {
+        'id': id,
+        'patientCode': patientCode,
+        'fullName': fullName,
+        'phone': phone,
+        'phoneEnc': phoneEnc,
+        'nationalId': nationalId,
+        'nationalIdEnc': nationalIdEnc,
+        'accountType': accountType,
+        'relationship': relationship,
+        'isMinor': isMinor ? 1 : 0,
+        'idType': idType,
+      },
+    );
+  }
+
+  /// Global (non-deleted) phone uniqueness check — mirrors the DB's own
+  /// idx_patients_phone_uniq constraint (migration 034: a generated column
+  /// that's NULL for deleted rows, so only live rows collide).
+  Future<bool> phoneExists(String phone) async {
+    final result = await _pool.execute(
+      'SELECT 1 FROM patients WHERE phone_e164 = :phone AND deleted_at IS NULL LIMIT 1',
+      {'phone': phone},
+    );
+    return result.rows.isNotEmpty;
+  }
+
+  /// All-or-nothing roster import (Module 1) — every row is inserted inside
+  /// ONE transaction, so a failure partway through rolls back every row
+  /// already inserted in this call. Rows are expected to have already
+  /// passed PatientService.bulkImportRoster's structural + uniqueness
+  /// validation; this method trusts that and only guards against a DB-level
+  /// race (e.g. the same phone number registered by a concurrent request
+  /// between validation and this call).
+  Future<List<Map<String, dynamic>>> bulkCreateSubPatients({
+    required String primaryAccountId,
+    required List<Map<String, dynamic>> rows,
+    required String createdBy,
+  }) async {
+    final primary = await findById(primaryAccountId);
+    if (primary == null) throw ApiError.notFound('Patient not found');
+    final primaryCode = primary['patient_code'] as String? ?? '';
+
+    // PII encryption is pure crypto, no DB access — done up front for every
+    // row so the transaction below only does DB work.
+    final prepared = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final id = generateUuid();
+      final suffix = id.replaceAll('-', '').substring(0, 4).toUpperCase();
+      final autoCode = primaryCode.isNotEmpty ? '$primaryCode-$suffix' : 'SUB-$suffix';
+      final phone = row['phone'] as String?;
+      final idValue = row['id_value'] as String?;
+      prepared.add({
+        'id': id,
+        'patientCode': autoCode,
+        'fullName': row['full_name'] as String,
+        'phone': phone,
+        'phoneEnc': phone != null ? await _pii.encrypt(phone) : null,
+        'nationalId': idValue,
+        'nationalIdEnc': idValue != null ? await _pii.encrypt(idValue) : null,
+        'relationship': row['relationship'] as String? ?? 'Relative',
+        'isMinor': row['is_minor'] == true,
+        'idType': row['id_type'] as String? ?? 'national_id',
+      });
+    }
+
+    try {
+      await _pool.transactional((conn) async {
+        for (final p in prepared) {
+          await _insertPatientRow(
+            conn,
+            id: p['id'] as String,
+            patientCode: p['patientCode'] as String,
+            fullName: p['fullName'] as String,
+            phone: p['phone'] as String?,
+            phoneEnc: p['phoneEnc'] as String?,
+            nationalId: p['nationalId'] as String?,
+            nationalIdEnc: p['nationalIdEnc'] as String?,
+            accountType: 'dependent',
+            primaryAccountId: primaryAccountId,
+            relationship: p['relationship'] as String?,
+            isMinor: p['isMinor'] as bool,
+            idType: p['idType'] as String,
+          );
+        }
+        await writeAudit(
+          conn: conn,
+          actorId: createdBy,
+          action: 'BULK_IMPORT_ROSTER',
+          targetType: 'patient',
+          targetIdUuid: primaryAccountId,
+          after: {'row_count': prepared.length},
+        );
+      });
+    } catch (e) {
+      if (e.toString().contains('1062')) {
+        throw ApiError.conflict(
+          'One or more phone numbers in this roster are already registered',
+        );
+      }
+      rethrow;
+    }
+
+    final created = <Map<String, dynamic>>[];
+    for (final p in prepared) {
+      final row = await findById(p['id'] as String);
+      if (row != null) created.add(row);
+    }
+    return created;
   }
 
   // ── Update ─────────────────────────────────────────────────────────────────

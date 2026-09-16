@@ -195,6 +195,22 @@ class PatientHandler {
     return noContentResponse();
   }
 
+  // ── Roster bulk import (Module 1) ────────────────────────────────────────────
+
+  Future<Response> bulkImportRoster(Request request, String patientId) async {
+    final body = await parseJsonBody(request);
+    final caller = requireAuthUser(request);
+
+    Validator(body)
+      ..required('rows')
+      ..isListOfObjects('rows')
+      ..throwIfInvalid();
+
+    final rows = (body['rows'] as List).cast<Map<String, dynamic>>();
+    final created = await _service.bulkImportRoster(patientId, rows, caller.id);
+    return okListResponse(created, total: created.length, limit: created.length, offset: 0);
+  }
+
   // ── Dependents ──────────────────────────────────────────────────────────────
 
   Future<Response> listDependents(Request request, String patientId) async {

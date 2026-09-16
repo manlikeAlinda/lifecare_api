@@ -179,6 +179,88 @@ class PatientService {
     await _repo.softDeleteSubPatient(subPatientId);
   }
 
+  // ── Roster bulk import (Module 1 — corporate accounts) ──────────────────────
+
+  static const _validIdTypes = {'national_id', 'passport', 'refugee_id', 'other'};
+  static final _phoneRegex = RegExp(r'^\+[1-9]\d{7,14}$');
+
+  /// All-or-nothing: validates every row first (structural + in-file
+  /// duplicates + DB uniqueness) and returns the full list of failures if
+  /// any exist, without inserting anything. Only once every row passes does
+  /// it hand off to PatientRepository.bulkCreateSubPatients, which commits
+  /// them all inside a single transaction.
+  Future<List<Map<String, dynamic>>> bulkImportRoster(
+    String corporateAccountId,
+    List<Map<String, dynamic>> rows,
+    String createdBy,
+  ) async {
+    final primary = await _repo.findById(corporateAccountId);
+    if (primary == null) throw ApiError.notFound('Patient not found');
+    if (primary['account_type'] != 'corporate') {
+      throw ApiError.businessRule(
+        'Roster import is only available for corporate accounts',
+      );
+    }
+    if (rows.isEmpty) {
+      throw ApiError.validationError('At least one roster row is required');
+    }
+
+    final errors = <Map<String, dynamic>>[];
+    final seenPhones = <String>{};
+    final seenIdValues = <String>{};
+
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+
+      final fullName = (row['full_name'] as String?)?.trim() ?? '';
+      if (fullName.isEmpty) {
+        errors.add({'field': 'rows[$i].full_name', 'message': 'Full name is required'});
+      }
+
+      final relationship = (row['relationship'] as String?)?.trim() ?? '';
+      if (relationship.isEmpty) {
+        errors.add({'field': 'rows[$i].relationship', 'message': 'Relationship is required'});
+      }
+
+      final idType = (row['id_type'] as String?)?.trim();
+      if (idType != null && idType.isNotEmpty && !_validIdTypes.contains(idType)) {
+        errors.add({
+          'field': 'rows[$i].id_type',
+          'message': 'id_type must be one of: ${_validIdTypes.join(', ')}',
+        });
+      }
+
+      final phone = (row['phone'] as String?)?.trim();
+      if (phone != null && phone.isNotEmpty) {
+        if (!_phoneRegex.hasMatch(phone)) {
+          errors.add({
+            'field': 'rows[$i].phone',
+            'message': 'phone must be in E.164 format (e.g. +256700000000)',
+          });
+        } else if (!seenPhones.add(phone)) {
+          errors.add({'field': 'rows[$i].phone', 'message': 'Duplicate phone number within this roster'});
+        } else if (await _repo.phoneExists(phone)) {
+          errors.add({'field': 'rows[$i].phone', 'message': 'Phone number is already registered'});
+        }
+      }
+
+      final idValue = (row['id_value'] as String?)?.trim();
+      if (idValue != null && idValue.isNotEmpty && !seenIdValues.add(idValue)) {
+        errors.add({'field': 'rows[$i].id_value', 'message': 'Duplicate ID value within this roster'});
+      }
+    }
+
+    if (errors.isNotEmpty) {
+      throw ApiError.validationError('Roster import failed validation', details: errors);
+    }
+
+    return _repo.bulkCreateSubPatients(
+      primaryAccountId: corporateAccountId,
+      rows: rows,
+      createdBy: createdBy,
+    );
+  }
+
   // ── Patient self-service beneficiaries (mobile app) ─────────────────────────
   //
   // Only the primary account holder (primary_account_id IS NULL) may manage
