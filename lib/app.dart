@@ -6,6 +6,7 @@ import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/logging/logger.dart';
 import 'package:lifecare_api/core/patients/beneficiary_context.dart';
 import 'package:lifecare_api/core/middleware/auth_middleware.dart';
+import 'package:lifecare_api/core/middleware/cors_middleware.dart';
 import 'package:lifecare_api/core/middleware/rate_limit_middleware.dart';
 import 'package:lifecare_api/core/middleware/request_id_middleware.dart';
 import 'package:lifecare_api/core/utils/response.dart';
@@ -981,6 +982,7 @@ Handler buildApp() {
   // ── Global pipeline ───────────────────────────────────────────────────────────
   return Pipeline()
       .addMiddleware(requestIdMiddleware())
+      .addMiddleware(corsMiddleware())
       .addMiddleware(rateLimitMiddleware(generalLimiter))
       .addMiddleware(_errorHandlingMiddleware())
       .addHandler(router.call);

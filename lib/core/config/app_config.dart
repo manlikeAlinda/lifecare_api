@@ -123,4 +123,16 @@ class AppConfig {
   // API happens to be hosted in.
   static int get clinicTzOffsetMinutes =>
       int.parse(_env['CLINIC_TZ_OFFSET_MINUTES'] ?? '180');
+
+  // ── CORS ────────────────────────────────────────────────────────────────
+  // Comma-separated explicit allowlist for non-localhost browser origins
+  // (e.g. the corporate portal's deployed domain, once it exists). Bare
+  // `localhost`/`127.0.0.1` origins don't need to be listed — cors_middleware
+  // always allows them regardless of port, since Origin is browser-set and
+  // can't be spoofed by a page running elsewhere.
+  static Set<String> get corsAllowedOrigins => (_env['CORS_ALLOWED_ORIGINS'] ?? '')
+      .split(',')
+      .map((o) => o.trim())
+      .where((o) => o.isNotEmpty)
+      .toSet();
 }
