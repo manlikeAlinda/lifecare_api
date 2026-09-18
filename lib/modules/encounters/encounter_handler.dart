@@ -7,6 +7,22 @@ import 'encounter_service.dart';
 
 const _validStatuses = ['open', 'closed', 'cancelled', 'completed', 'pending'];
 
+// Must match the ENUM in migrations/041_encounters_diagnosis_category.sql.
+const _validDiagnosisCategories = [
+  'respiratory',
+  'gastrointestinal',
+  'musculoskeletal',
+  'cardiovascular',
+  'dermatological',
+  'infectious_disease',
+  'reproductive_maternal',
+  'mental_health',
+  'injury_trauma',
+  'chronic_disease_management',
+  'preventive_wellness',
+  'other',
+];
+
 class EncounterHandler {
   final EncounterService _service;
 
@@ -45,6 +61,7 @@ class EncounterHandler {
       ..isListOfObjects('drug_lines')
       ..isListOfObjects('medications')
       ..currencyAmount('discount_shillings')
+      ..oneOf('diagnosis_category', _validDiagnosisCategories)
       ..throwIfInvalid();
 
     // Require at least one service or drug line so we never create an
@@ -75,6 +92,7 @@ class EncounterHandler {
       ..isListOfObjects('drug_lines')
       ..isListOfObjects('medications')
       ..currencyAmount('discount_shillings')
+      ..oneOf('diagnosis_category', _validDiagnosisCategories)
       ..throwIfInvalid();
 
     final encounter = await _service.updateEncounter(id, body, caller.id);

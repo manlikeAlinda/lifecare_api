@@ -61,6 +61,9 @@ import 'package:lifecare_api/modules/ads/ad_service.dart';
 import 'package:lifecare_api/modules/audit/audit_handler.dart';
 import 'package:lifecare_api/modules/audit/audit_repository.dart';
 import 'package:lifecare_api/modules/audit/audit_service.dart';
+import 'package:lifecare_api/modules/patient_analytics/patient_analytics_handler.dart';
+import 'package:lifecare_api/modules/patient_analytics/patient_analytics_repository.dart';
+import 'package:lifecare_api/modules/patient_analytics/patient_analytics_service.dart';
 
 Handler buildApp() {
   final pool = Database.pool;
@@ -81,6 +84,7 @@ Handler buildApp() {
   final checkoutRepo = CheckoutRepository(pool);
   final adRepo = AdRepository(pool);
   final auditRepo = AuditRepository(pool);
+  final patientAnalyticsRepo = PatientAnalyticsRepository(pool);
 
   // ── Services ────────────────────────────────────────────────────────────────
   final authService = AuthService(authRepo);
@@ -105,6 +109,7 @@ Handler buildApp() {
   final checkoutService = CheckoutService(checkoutRepo, walletRepo);
   final adService = AdService(adRepo);
   final auditService = AuditService(auditRepo);
+  final patientAnalyticsService = PatientAnalyticsService(patientAnalyticsRepo, patientRepo);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   final authHandler = AuthHandler(authService);
@@ -123,6 +128,7 @@ Handler buildApp() {
   final checkoutHandler = CheckoutHandler(checkoutService);
   final adHandler = AdHandler(adService);
   final auditHandler = AuditHandler(auditService);
+  final patientAnalyticsHandler = PatientAnalyticsHandler(patientAnalyticsService);
 
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
@@ -337,6 +343,38 @@ Handler buildApp() {
     '/v1/patients/<id>/roster/bulk-import',
     adminOnly.addHandler(
       (Request req) => patientHandler.bulkImportRoster(req, req.params['id']!),
+    ),
+  );
+
+  // ── Corporate cost centres & budget (admin-only) ──────────────────────────────
+  router.get(
+    '/v1/admin/patients/<id>/cost-centres',
+    adminOnly.addHandler(
+      (Request req) => patientHandler.listCostCentres(req, req.params['id']!),
+    ),
+  );
+  router.post(
+    '/v1/admin/patients/<id>/cost-centres',
+    adminOnly.addHandler(
+      (Request req) => patientHandler.createCostCentre(req, req.params['id']!),
+    ),
+  );
+  router.patch(
+    '/v1/admin/cost-centres/<id>',
+    adminOnly.addHandler(
+      (Request req) => patientHandler.renameCostCentre(req, req.params['id']!),
+    ),
+  );
+  router.delete(
+    '/v1/admin/cost-centres/<id>',
+    adminOnly.addHandler(
+      (Request req) => patientHandler.retireCostCentre(req, req.params['id']!),
+    ),
+  );
+  router.patch(
+    '/v1/admin/patients/<id>/budget',
+    adminOnly.addHandler(
+      (Request req) => patientHandler.setBudget(req, req.params['id']!),
     ),
   );
 
@@ -895,6 +933,26 @@ Handler buildApp() {
     Pipeline().addMiddleware(patientAuth2).addHandler(
       (Request req) => encounterHandler.setReasonHidden(req, req.params['id']!),
     ),
+  );
+
+  // ── Corporate analytics dashboard (self-service — scoped to the caller's
+  // own corporate account; PatientAnalyticsService rejects any non-corporate
+  // caller) ──────────────────────────────────────────────────────────────
+  router.get(
+    '/v1/patient/analytics/financial',
+    Pipeline().addMiddleware(patientAuth2).addHandler(patientAnalyticsHandler.financial),
+  );
+  router.get(
+    '/v1/patient/analytics/utilization',
+    Pipeline().addMiddleware(patientAuth2).addHandler(patientAnalyticsHandler.utilization),
+  );
+  router.get(
+    '/v1/patient/analytics/clinical',
+    Pipeline().addMiddleware(patientAuth2).addHandler(patientAnalyticsHandler.clinical),
+  );
+  router.get(
+    '/v1/patient/analytics/governance',
+    Pipeline().addMiddleware(patientAuth2).addHandler(patientAnalyticsHandler.governance),
   );
 
   // ── Admin — Beneficiary login-access-request queue ────────────────────────────

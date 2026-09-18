@@ -97,6 +97,7 @@ class EncounterService {
       medications: medications,
       referenceNumber: data['reference_number'] as String?,
       serviceType: data['service_type'] as String?,
+      diagnosisCategory: data['diagnosis_category'] as String?,
       visitedAt: data['visited_at'] as String?,
     );
   }

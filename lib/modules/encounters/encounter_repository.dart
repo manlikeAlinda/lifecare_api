@@ -11,7 +11,8 @@ class EncounterRepository {
   // ── DB column reality ─────────────────────────────────────────────────────
   // encounters:           encounter_id (PK), patient_id, dependent_id,
   //                       reference_number, service_id, service_type,
-  //                       status, total_cost, visited_at, created_at
+  //                       diagnosis_category, status, total_cost, visited_at,
+  //                       created_at
   // encounter_services:   id (PK), encounter_id, service_id (legacy, unused —
   //                       see migration 025), domain, domain_item_id,
   //                       service_name, price, quantity
@@ -99,6 +100,7 @@ class EncounterRepository {
 
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
+      'e.diagnosis_category, '
       'e.status, e.total_cost, e.discount_shillings, e.created_at, e.reason, e.reason_hidden, '
       'p.full_name AS patient_name, p.patient_code, '
       'dep.full_name AS dependent_name, dep.patient_code AS dependent_code, '
@@ -130,6 +132,7 @@ class EncounterRepository {
   Future<Map<String, dynamic>?> findById(String id, {bool asPrimaryView = false}) async {
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
+      'e.diagnosis_category, '
       'e.status, e.total_cost, e.discount_shillings, e.created_at, e.reason, e.reason_hidden, '
       'p.full_name AS patient_name, p.patient_code, '
       'dep.full_name AS dependent_name, dep.patient_code AS dependent_code, '
@@ -270,6 +273,7 @@ class EncounterRepository {
     required List<Map<String, dynamic>> medications,
     String? referenceNumber,
     String? serviceType,
+    String? diagnosisCategory,
     String? visitedAt,
   }) async {
     final totalCostInt = totalCost.round();
@@ -280,10 +284,10 @@ class EncounterRepository {
       await conn.execute(
         'INSERT INTO encounters '
         '(encounter_id, patient_id, dependent_id, reference_number, visited_at, '
-        'service_type, total_cost, discount_shillings) '
+        'service_type, diagnosis_category, total_cost, discount_shillings) '
         "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), "
         "${dependentId != null ? "UNHEX(REPLACE(:dependentId, '-', ''))" : 'NULL'}, "
-        ':referenceNumber, :visitedAt, :serviceType, :totalCost, :discountShillings)',
+        ':referenceNumber, :visitedAt, :serviceType, :diagnosisCategory, :totalCost, :discountShillings)',
         {
           'id': encounterId,
           'patientId': patientId,
@@ -291,6 +295,7 @@ class EncounterRepository {
           'referenceNumber': referenceNumber ?? '',
           'visitedAt': visitedAt ?? _nowString(),
           'serviceType': serviceType ?? 'General',
+          'diagnosisCategory': diagnosisCategory,
           'totalCost': totalCost,
           'discountShillings': discountShillings.round(),
         },
@@ -401,6 +406,7 @@ class EncounterRepository {
     const colMap = {
       'service_type': 'service_type',
       'encounter_type': 'service_type', // legacy alias
+      'diagnosis_category': 'diagnosis_category',
       'status': 'status',
       'reference_number': 'reference_number',
       'visited_at': 'visited_at',

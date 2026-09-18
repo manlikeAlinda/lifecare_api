@@ -17,6 +17,7 @@ class PatientRepository {
   //   patient_id, patient_code, full_name, phone_e164, national_id_hash,
   //   is_active, created_at, account_type,
   //   national_id, primary_account_id, relationship, deleted_at
+  //   cost_centre_id (039), allocated_budget_shillings (040)
 
   static const _uuidId =
       "LOWER(CONCAT(SUBSTR(HEX(patient_id),1,8),'-',SUBSTR(HEX(patient_id),9,4),'-',"
@@ -29,11 +30,17 @@ class PatientRepository {
       "SUBSTR(HEX(primary_account_id),13,4),'-',SUBSTR(HEX(primary_account_id),17,4),'-',"
       "SUBSTR(HEX(primary_account_id),21)))";
 
+  static const _costCentreUuid =
+      "LOWER(CONCAT(SUBSTR(HEX(cost_centre_id),1,8),'-',SUBSTR(HEX(cost_centre_id),9,4),'-',"
+      "SUBSTR(HEX(cost_centre_id),13,4),'-',SUBSTR(HEX(cost_centre_id),17,4),'-',"
+      "SUBSTR(HEX(cost_centre_id),21)))";
+
   static const _selectFields =
       'SELECT $_uuidId, patient_code, full_name, phone_e164, national_id, '
       'is_active, created_at, account_type, relationship, is_minor, '
-      'login_access_status, id_type, '
-      '$_primaryAccountUuid AS primary_account_id '
+      'login_access_status, id_type, allocated_budget_shillings, '
+      '$_primaryAccountUuid AS primary_account_id, '
+      '$_costCentreUuid AS cost_centre_id '
       'FROM patients';
 
   /// Fetches + decrypts email_enc (the only storage for email — there is no
@@ -268,20 +275,23 @@ class PatientRepository {
     String? nationalIdEnc,
     required String accountType,
     String? primaryAccountId,
+    String? costCentreId,
     String? relationship,
     bool isMinor = false,
     String idType = 'national_id',
   }) async {
     final primaryIdHex = primaryAccountId?.replaceAll('-', '');
     final primaryIdExpr = primaryIdHex != null ? "UNHEX('$primaryIdHex')" : 'NULL';
+    final costCentreIdHex = costCentreId?.replaceAll('-', '');
+    final costCentreIdExpr = costCentreIdHex != null ? "UNHEX('$costCentreIdHex')" : 'NULL';
 
     await conn.execute(
       'INSERT INTO patients '
       '(patient_id, patient_code, full_name, phone_e164, phone_enc, '
-      ' national_id, nat_id_enc, account_type, primary_account_id, relationship, is_minor, id_type) '
+      ' national_id, nat_id_enc, account_type, primary_account_id, cost_centre_id, relationship, is_minor, id_type) '
       "VALUES (UNHEX(REPLACE(:id, '-', '')), :patientCode, :fullName, "
       ':phone, :phoneEnc, :nationalId, :nationalIdEnc, :accountType, '
-      '$primaryIdExpr, :relationship, :isMinor, :idType)',
+      '$primaryIdExpr, $costCentreIdExpr, :relationship, :isMinor, :idType)',
       {
         'id': id,
         'patientCode': patientCode,
@@ -345,6 +355,7 @@ class PatientRepository {
         'relationship': row['relationship'] as String? ?? 'Relative',
         'isMinor': row['is_minor'] == true,
         'idType': row['id_type'] as String? ?? 'national_id',
+        'costCentreId': row['cost_centre_id'] as String?,
       });
     }
 
@@ -362,6 +373,7 @@ class PatientRepository {
             nationalIdEnc: p['nationalIdEnc'] as String?,
             accountType: 'dependent',
             primaryAccountId: primaryAccountId,
+            costCentreId: p['costCentreId'] as String?,
             relationship: p['relationship'] as String?,
             isMinor: p['isMinor'] as bool,
             idType: p['idType'] as String,
@@ -391,6 +403,160 @@ class PatientRepository {
       if (row != null) created.add(row);
     }
     return created;
+  }
+
+  // ── Cost centres (corporate accounts) ────────────────────────────────────
+
+  static final _costCentreSelect =
+      'SELECT ${uuidSelect('cost_centre_id', 'id')}, '
+      'name, is_active, created_at '
+      'FROM cost_centres';
+
+  Future<List<Map<String, dynamic>>> listCostCentres(
+    String corporateAccountId,
+  ) async {
+    final result = await _pool.execute(
+      '$_costCentreSelect '
+      "WHERE corporate_account_id = UNHEX(REPLACE(:corpId, '-', '')) AND is_active = 1 "
+      'ORDER BY name',
+      {'corpId': corporateAccountId},
+    );
+    return result.rows.map(_rowToMap).toList();
+  }
+
+  Future<Map<String, dynamic>?> findCostCentreById(String id) async {
+    final result = await _pool.execute(
+      "$_costCentreSelect WHERE ${uuidWhere('cost_centre_id', 'id')} LIMIT 1",
+      {'id': id},
+    );
+    if (result.rows.isEmpty) return null;
+    return _rowToMap(result.rows.first);
+  }
+
+  /// True only when [costCentreId] both exists and belongs to
+  /// [corporateAccountId] — used to validate a roster row's cost_centre_id
+  /// without leaking whether a cost centre exists under a DIFFERENT
+  /// corporate account.
+  Future<bool> costCentreBelongsTo(
+    String costCentreId,
+    String corporateAccountId,
+  ) async {
+    final result = await _pool.execute(
+      'SELECT 1 FROM cost_centres '
+      "WHERE ${uuidWhere('cost_centre_id', 'id')} "
+      "AND corporate_account_id = UNHEX(REPLACE(:corpId, '-', '')) "
+      'AND is_active = 1 LIMIT 1',
+      {'id': costCentreId, 'corpId': corporateAccountId},
+    );
+    return result.rows.isNotEmpty;
+  }
+
+  Future<Map<String, dynamic>> createCostCentre({
+    required String corporateAccountId,
+    required String name,
+    required String createdBy,
+  }) async {
+    final id = generateUuid();
+    try {
+      await _pool.transactional((conn) async {
+        await conn.execute(
+          'INSERT INTO cost_centres (cost_centre_id, corporate_account_id, name) '
+          "VALUES (${uuidParam('id')}, ${uuidParam('corpId')}, :name)",
+          {'id': id, 'corpId': corporateAccountId, 'name': name},
+        );
+        await writeAudit(
+          conn: conn,
+          actorId: createdBy,
+          action: 'CREATE_COST_CENTRE',
+          targetType: 'cost_centre',
+          targetIdUuid: id,
+          after: {'name': name, 'corporate_account_id': corporateAccountId},
+        );
+      });
+    } catch (e) {
+      if (e.toString().contains('1062')) {
+        throw ApiError.conflict('A cost centre with this name already exists');
+      }
+      rethrow;
+    }
+    return (await findCostCentreById(id))!;
+  }
+
+  Future<Map<String, dynamic>?> renameCostCentre(
+    String id,
+    String name, {
+    required String actorId,
+  }) async {
+    try {
+      await _pool.transactional((conn) async {
+        await conn.execute(
+          'UPDATE cost_centres SET name = :name '
+          "WHERE ${uuidWhere('cost_centre_id', 'id')}",
+          {'id': id, 'name': name},
+        );
+        await writeAudit(
+          conn: conn,
+          actorId: actorId,
+          action: 'RENAME_COST_CENTRE',
+          targetType: 'cost_centre',
+          targetIdUuid: id,
+          after: {'name': name},
+        );
+      });
+    } catch (e) {
+      if (e.toString().contains('1062')) {
+        throw ApiError.conflict('A cost centre with this name already exists');
+      }
+      rethrow;
+    }
+    return findCostCentreById(id);
+  }
+
+  Future<bool> retireCostCentre(String id, {required String actorId}) async {
+    var affected = 0;
+    await _pool.transactional((conn) async {
+      final result = await conn.execute(
+        'UPDATE cost_centres SET is_active = 0 '
+        "WHERE ${uuidWhere('cost_centre_id', 'id')} AND is_active = 1",
+        {'id': id},
+      );
+      affected = result.affectedRows.toInt();
+      if (affected > 0) {
+        await writeAudit(
+          conn: conn,
+          actorId: actorId,
+          action: 'RETIRE_COST_CENTRE',
+          targetType: 'cost_centre',
+          targetIdUuid: id,
+        );
+      }
+    });
+    return affected > 0;
+  }
+
+  /// Admin-set ceiling — null clears it. Only meaningful on a corporate
+  /// primary account; PatientService enforces that before calling this.
+  Future<Map<String, dynamic>> setAllocatedBudget(
+    String corporateAccountId,
+    double? budgetShillings, {
+    required String actorId,
+  }) async {
+    await _pool.transactional((conn) async {
+      await conn.execute(
+        'UPDATE patients SET allocated_budget_shillings = :budget '
+        "WHERE ${uuidWhere('patient_id', 'id')}",
+        {'id': corporateAccountId, 'budget': budgetShillings},
+      );
+      await writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'SET_ALLOCATED_BUDGET',
+        targetType: 'patient',
+        targetIdUuid: corporateAccountId,
+        after: {'allocated_budget_shillings': budgetShillings},
+      );
+    });
+    return (await findById(corporateAccountId))!;
   }
 
   // ── Update ─────────────────────────────────────────────────────────────────

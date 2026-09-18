@@ -45,6 +45,17 @@ Map<String, dynamic> rowToMap(ResultSetRow row) {
     'quantity',
     // catalog
     'price_minor',
+    // corporate accounts
+    'allocated_budget_shillings',
+    // corporate analytics aggregates
+    'spend_shillings',
+    'visit_count',
+    'dependent_spend',
+    'primary_spend',
+    'volume',
+    'cost_shillings',
+    'ledger_sum',
+    'net_spend',
     // analytics aggregates
     'encounter_count',
     'total_billed',

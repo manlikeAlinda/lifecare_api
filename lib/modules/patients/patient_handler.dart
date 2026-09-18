@@ -211,6 +211,61 @@ class PatientHandler {
     return okListResponse(created, total: created.length, limit: created.length, offset: 0);
   }
 
+  // ── Cost centres & budget (admin — corporate accounts) ───────────────────
+
+  Future<Response> listCostCentres(Request request, String corporateAccountId) async {
+    final costCentres = await _service.listCostCentres(corporateAccountId);
+    return okListResponse(costCentres, total: costCentres.length);
+  }
+
+  Future<Response> createCostCentre(Request request, String corporateAccountId) async {
+    final body = await parseJsonBody(request);
+    final caller = requireAuthUser(request);
+
+    Validator(body)..required('name')..throwIfInvalid();
+
+    final costCentre = await _service.createCostCentre(
+      corporateAccountId,
+      body['name'] as String,
+      caller.id,
+    );
+    return createdResponse(costCentre);
+  }
+
+  Future<Response> renameCostCentre(Request request, String costCentreId) async {
+    final body = await parseJsonBody(request);
+    final caller = requireAuthUser(request);
+
+    Validator(body)..required('name')..throwIfInvalid();
+
+    final costCentre = await _service.renameCostCentre(
+      costCentreId,
+      body['name'] as String,
+      caller.id,
+    );
+    return okResponse(costCentre);
+  }
+
+  Future<Response> retireCostCentre(Request request, String costCentreId) async {
+    final caller = requireAuthUser(request);
+    await _service.retireCostCentre(costCentreId, caller.id);
+    return noContentResponse();
+  }
+
+  Future<Response> setBudget(Request request, String corporateAccountId) async {
+    final body = await parseJsonBody(request);
+    final caller = requireAuthUser(request);
+
+    Validator(body)..currencyAmount('allocated_budget_shillings')..throwIfInvalid();
+
+    final patient = await _service.setAllocatedBudget(
+      corporateAccountId,
+      body['allocated_budget_shillings'] as num?,
+      caller.id,
+    );
+    return okResponse(patient);
+  }
+
   // ── Dependents ──────────────────────────────────────────────────────────────
 
   Future<Response> listDependents(Request request, String patientId) async {

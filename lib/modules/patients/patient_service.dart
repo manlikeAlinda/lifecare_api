@@ -196,7 +196,7 @@ class PatientService {
   ) async {
     final primary = await _repo.findById(corporateAccountId);
     if (primary == null) throw ApiError.notFound('Patient not found');
-    if (primary['account_type'] != 'corporate') {
+    if (!isCorporatePrimaryRow(primary)) {
       throw ApiError.businessRule(
         'Roster import is only available for corporate accounts',
       );
@@ -208,6 +208,10 @@ class PatientService {
     final errors = <Map<String, dynamic>>[];
     final seenPhones = <String>{};
     final seenIdValues = <String>{};
+    final uuidRegex = RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+      caseSensitive: false,
+    );
 
     for (var i = 0; i < rows.length; i++) {
       final row = rows[i];
@@ -248,6 +252,21 @@ class PatientService {
       if (idValue != null && idValue.isNotEmpty && !seenIdValues.add(idValue)) {
         errors.add({'field': 'rows[$i].id_value', 'message': 'Duplicate ID value within this roster'});
       }
+
+      final costCentreId = (row['cost_centre_id'] as String?)?.trim();
+      if (costCentreId != null && costCentreId.isNotEmpty) {
+        if (!uuidRegex.hasMatch(costCentreId)) {
+          errors.add({
+            'field': 'rows[$i].cost_centre_id',
+            'message': 'cost_centre_id must be a valid UUID',
+          });
+        } else if (!await _repo.costCentreBelongsTo(costCentreId, corporateAccountId)) {
+          errors.add({
+            'field': 'rows[$i].cost_centre_id',
+            'message': 'Unknown cost centre for this corporate account',
+          });
+        }
+      }
     }
 
     if (errors.isNotEmpty) {
@@ -258,6 +277,70 @@ class PatientService {
       primaryAccountId: corporateAccountId,
       rows: rows,
       createdBy: createdBy,
+    );
+  }
+
+  // ── Cost centres & budget (admin — corporate accounts) ───────────────────
+
+  Future<Map<String, dynamic>> _requireCorporateAccount(String id) async {
+    final primary = await _repo.findById(id);
+    if (primary == null) throw ApiError.notFound('Patient not found');
+    if (!isCorporatePrimaryRow(primary)) {
+      throw ApiError.businessRule('Cost centres are only available for corporate accounts');
+    }
+    return primary;
+  }
+
+  Future<List<Map<String, dynamic>>> listCostCentres(String corporateAccountId) async {
+    await _requireCorporateAccount(corporateAccountId);
+    return _repo.listCostCentres(corporateAccountId);
+  }
+
+  Future<Map<String, dynamic>> createCostCentre(
+    String corporateAccountId,
+    String name,
+    String createdBy,
+  ) async {
+    await _requireCorporateAccount(corporateAccountId);
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) throw ApiError.validationError('name is required');
+    return _repo.createCostCentre(
+      corporateAccountId: corporateAccountId,
+      name: trimmed,
+      createdBy: createdBy,
+    );
+  }
+
+  Future<Map<String, dynamic>> renameCostCentre(
+    String costCentreId,
+    String name,
+    String actorId,
+  ) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) throw ApiError.validationError('name is required');
+    final updated = await _repo.renameCostCentre(costCentreId, trimmed, actorId: actorId);
+    if (updated == null) throw ApiError.notFound('Cost centre not found');
+    return updated;
+  }
+
+  Future<void> retireCostCentre(String costCentreId, String actorId) async {
+    final retired = await _repo.retireCostCentre(costCentreId, actorId: actorId);
+    if (!retired) throw ApiError.notFound('Cost centre not found');
+  }
+
+  Future<Map<String, dynamic>> setAllocatedBudget(
+    String corporateAccountId,
+    num? budgetShillings,
+    String actorId,
+  ) async {
+    await _requireCorporateAccount(corporateAccountId);
+    if (budgetShillings != null && budgetShillings < 0) {
+      throw ApiError.validationError('allocated_budget_shillings must not be negative');
+    }
+    return _repo.setAllocatedBudget(
+      corporateAccountId,
+      budgetShillings?.toDouble(),
+      actorId: actorId,
     );
   }
 
