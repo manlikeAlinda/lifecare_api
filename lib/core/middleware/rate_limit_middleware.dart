@@ -1,6 +1,7 @@
 import 'dart:collection';
 import 'package:shelf/shelf.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
+import 'package:lifecare_api/core/logging/logger.dart';
 import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/middleware/request_id_middleware.dart';
 
@@ -56,6 +57,13 @@ Middleware rateLimitMiddleware(RateLimiter limiter) {
   return (Handler inner) {
     return (Request request) {
       final requestId = getRequestId(request);
+      // TEMPORARY — remove once the XFF trust question is settled (see
+      // 2026-09-22 audit finding #1). Logs what this header actually looks
+      // like arriving from Railway's edge, spoofed or not.
+      log.info(
+        'XFF DEBUG: x-forwarded-for="${request.headers['x-forwarded-for']}" '
+        'x-real-ip="${request.headers['x-real-ip']}"',
+      );
       final ip = _clientIp(request);
       if (!limiter.tryConsume(ip)) {
         return errorResponse(ApiError.rateLimited(), requestId);
