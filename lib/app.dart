@@ -940,19 +940,31 @@ Handler buildApp() {
   // caller) ──────────────────────────────────────────────────────────────
   router.get(
     '/v1/patient/analytics/financial',
-    Pipeline().addMiddleware(patientAuth2).addHandler(patientAnalyticsHandler.financial),
+    Pipeline()
+        .addMiddleware(patientAuth2)
+        .addMiddleware(rateLimitMiddleware(analyticsLimiter))
+        .addHandler(patientAnalyticsHandler.financial),
   );
   router.get(
     '/v1/patient/analytics/utilization',
-    Pipeline().addMiddleware(patientAuth2).addHandler(patientAnalyticsHandler.utilization),
+    Pipeline()
+        .addMiddleware(patientAuth2)
+        .addMiddleware(rateLimitMiddleware(analyticsLimiter))
+        .addHandler(patientAnalyticsHandler.utilization),
   );
   router.get(
     '/v1/patient/analytics/clinical',
-    Pipeline().addMiddleware(patientAuth2).addHandler(patientAnalyticsHandler.clinical),
+    Pipeline()
+        .addMiddleware(patientAuth2)
+        .addMiddleware(rateLimitMiddleware(analyticsLimiter))
+        .addHandler(patientAnalyticsHandler.clinical),
   );
   router.get(
     '/v1/patient/analytics/governance',
-    Pipeline().addMiddleware(patientAuth2).addHandler(patientAnalyticsHandler.governance),
+    Pipeline()
+        .addMiddleware(patientAuth2)
+        .addMiddleware(rateLimitMiddleware(analyticsLimiter))
+        .addHandler(patientAnalyticsHandler.governance),
   );
 
   // ── Admin — Beneficiary login-access-request queue ────────────────────────────

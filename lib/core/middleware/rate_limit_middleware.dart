@@ -47,6 +47,10 @@ final loginLimiter = RateLimiter(maxRequests: 10, window: Duration(minutes: 1));
 final refreshLimiter = RateLimiter(maxRequests: 20, window: Duration(minutes: 1));
 final generalLimiter = RateLimiter(maxRequests: 300, window: Duration(minutes: 1));
 final reportLimiter = RateLimiter(maxRequests: 5, window: Duration(minutes: 1));
+// /v1/patient/analytics/* — each call runs several DB queries; the shared
+// generalLimiter (300/min, whole API) doesn't stop one caller from driving
+// unbounded concurrent load against the heaviest queries in the codebase.
+final analyticsLimiter = RateLimiter(maxRequests: 20, window: Duration(minutes: 1));
 
 Middleware rateLimitMiddleware(RateLimiter limiter) {
   return (Handler inner) {
