@@ -180,8 +180,16 @@ class UserRepository {
 
   Future<void> updatePassword(String id, String passwordHash, String actorId) async {
     await _pool.transactional((conn) async {
+      // Must also stamp password_alg='bcrypt' — this is the ONLY other path
+      // (besides AuthRepository.updatePasswordHash's login-triggered
+      // upgrade) that writes password_hash. Leaving password_alg untouched
+      // here means a reset on a legacy sha256 row writes a fresh bcrypt
+      // hash but leaves the algorithm marker at 'sha256'/NULL, so
+      // AuthService.login keeps comparing it with SHA-256 logic — the user
+      // is locked out of the password an admin JUST set, with no error
+      // indicating why (see 2026-09-22 security audit finding #2).
       await conn.execute(
-        'UPDATE users SET password_hash = :hash '
+        "UPDATE users SET password_hash = :hash, password_alg = 'bcrypt' "
         "WHERE user_id = UNHEX(REPLACE(:id, '-', ''))",
         {'hash': passwordHash, 'id': id},
       );
