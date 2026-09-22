@@ -91,11 +91,20 @@ class PatientAnalyticsService {
     final range = _resolveRange(from, to);
     final corpId = callerPatientId;
 
-    final walletTotals = await _repo.getWalletTotals(corpId, from: range.from, to: range.to);
-    final spendByBeneficiary = await _repo.getSpendByBeneficiary(corpId, from: range.from, to: range.to);
-    final spendByServiceType = await _repo.getSpendByServiceType(corpId, from: range.from, to: range.to);
-    final budget = await _repo.getAllocatedBudget(corpId);
-    final currentBalance = await _repo.getCurrentBalance(corpId);
+    // Independent queries — run concurrently rather than one round trip at
+    // a time, matching AnalyticsRepository.getKpis()'s Future.wait pattern.
+    final results = await Future.wait([
+      _repo.getWalletTotals(corpId, from: range.from, to: range.to),
+      _repo.getSpendByBeneficiary(corpId, from: range.from, to: range.to),
+      _repo.getSpendByServiceType(corpId, from: range.from, to: range.to),
+      _repo.getAllocatedBudget(corpId),
+      _repo.getCurrentBalance(corpId),
+    ]);
+    final walletTotals = results[0] as Map<String, dynamic>;
+    final spendByBeneficiary = results[1] as List<Map<String, dynamic>>;
+    final spendByServiceType = results[2] as List<Map<String, dynamic>>;
+    final budget = results[3] as double?;
+    final currentBalance = results[4] as double;
 
     final netSpend = (walletTotals['net_spend'] as num).toDouble();
     final totalDeposits = (walletTotals['total_deposits'] as num).toDouble();

@@ -41,7 +41,14 @@ class AppConfig {
   static String get dbName => _env['DB_NAME'] ?? 'lifecare';
   static String get dbUser => _required('DB_USER');
   static String get dbPassword => _required('DB_PASSWORD');
-  static int get dbPoolSize => int.parse(_env['DB_POOL_SIZE'] ?? '2');
+  // Default raised from 2 → 10 (2026-09-22 latency investigation): a pool
+  // of 2 meant any handler making several sequential DB calls held a
+  // connection for its whole duration, serializing unrelated requests
+  // behind it under concurrent load. Verify this against the DB host's own
+  // max_connections limit (Hostinger plan cap, if DB_HOST still points
+  // there) before relying on this default in production — set DB_POOL_SIZE
+  // explicitly if 10 is too high.
+  static int get dbPoolSize => int.parse(_env['DB_POOL_SIZE'] ?? '10');
 
   static String get jwtSecret {
     final secret = _env['JWT_SECRET'];

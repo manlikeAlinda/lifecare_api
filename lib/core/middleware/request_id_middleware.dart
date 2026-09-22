@@ -9,8 +9,10 @@ Middleware requestIdMiddleware() {
     return (Request request) async {
       final requestId = generateUuid();
       final updated = request.change(context: {_requestIdKey: requestId});
+      final stopwatch = Stopwatch()..start();
       final response = await inner(updated);
-      log.info('${request.method} ${request.requestedUri.path}${request.requestedUri.query.isNotEmpty ? '?${request.requestedUri.query}' : ''} → ${response.statusCode}');
+      stopwatch.stop();
+      log.info('${request.method} ${request.requestedUri.path}${request.requestedUri.query.isNotEmpty ? '?${request.requestedUri.query}' : ''} → ${response.statusCode} (${stopwatch.elapsedMilliseconds}ms)');
       return response;
     };
   };
