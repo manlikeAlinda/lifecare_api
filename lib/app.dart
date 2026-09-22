@@ -133,7 +133,7 @@ Handler buildApp() {
   // ── Middleware pipelines ─────────────────────────────────────────────────────
   final auth = authMiddleware();
   final adminOnly = Pipeline().addMiddleware(auth).addMiddleware(requireAdmin());
-  final patientAuth2 = patientAuthMiddleware();
+  final patientAuth2 = patientAuthMiddleware(patientAuthRepo.findCredentialByPatientId);
 
   // ── Router ───────────────────────────────────────────────────────────────────
   final router = Router();

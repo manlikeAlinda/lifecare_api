@@ -107,8 +107,19 @@ AuthUser requireAuthUser(Request request) {
   return user;
 }
 
-/// Verifies a patient JWT Bearer token and attaches [PatientUser] to the request context.
-Middleware patientAuthMiddleware() {
+/// Verifies a patient JWT Bearer token and attaches [PatientUser] to the
+/// request context. [findCredential] is injected (not imported directly —
+/// core/ never depends on modules/ anywhere in this codebase, and this
+/// keeps that intact) so the middleware can do a LIVE per-request
+/// credential-status check, not just verify the JWT's signature/expiry.
+///
+/// This is what makes suspending a beneficiary's mobile access effectively
+/// immediate rather than "rides out the access token's remaining ≤15-minute
+/// life" — every authenticated request now re-checks
+/// patient_credentials.status, not just login()/refresh().
+Middleware patientAuthMiddleware(
+  Future<Map<String, dynamic>?> Function(String patientId) findCredential,
+) {
   return (Handler inner) {
     return (Request request) async {
       final requestId = getRequestId(request);
@@ -129,8 +140,17 @@ Middleware patientAuthMiddleware() {
           );
         }
 
+        final patientId = payload['sub'] as String;
+        final credential = await findCredential(patientId);
+        if (credential == null || credential['status'] == 'suspended') {
+          return errorResponse(
+            ApiError.forbidden('Account access has been suspended'),
+            requestId,
+          );
+        }
+
         final patientUser = PatientUser(
-          id: payload['sub'] as String,
+          id: patientId,
           phone: payload['phone'] as String? ?? '',
           patientCode: payload['patient_code'] as String? ?? '',
         );
