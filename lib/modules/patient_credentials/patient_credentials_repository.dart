@@ -1,4 +1,5 @@
 import 'package:mysql_client/mysql_client.dart';
+import 'package:lifecare_api/core/audit/audit_writer.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 
@@ -36,7 +37,13 @@ class PatientCredentialsRepository {
     return _rowToMap(result.rows.first);
   }
 
-  Future<void> insertCredential({
+  // ── Low-level mutations — take a live `conn`, called only from the *Tx
+  // methods below (never directly from the service), so each action's
+  // mutation(s) + its audit entry commit or roll back together on one
+  // connection. No external callers outside this file — confirmed by grep.
+
+  Future<void> _insertCredential(
+    MySQLConnection conn, {
     required String credentialId,
     required String patientId,
     required String phoneE164,
@@ -44,7 +51,7 @@ class PatientCredentialsRepository {
     required String activationPinHash,
     int mustChangePw = 1,
   }) async {
-    await _pool.execute(
+    await conn.execute(
       'INSERT INTO patient_credentials '
       '(credential_id, patient_id, phone_e164, password_hash, activation_pin, status, must_change_pw) '
       'VALUES (${uuidParam('credentialId')}, ${uuidParam('patientId')}, '
@@ -60,14 +67,15 @@ class PatientCredentialsRepository {
     );
   }
 
-  Future<void> updateCredential({
+  Future<void> _updateCredential(
+    MySQLConnection conn, {
     required String patientId,
     required String passwordHash,
     required String activationPinHash,
     required String status,
     required int mustChangePw,
   }) async {
-    await _pool.execute(
+    await conn.execute(
       'UPDATE patient_credentials '
       'SET password_hash = :passwordHash, '
       '    activation_pin = :activationPinHash, '
@@ -84,45 +92,141 @@ class PatientCredentialsRepository {
     );
   }
 
-  Future<void> revokeAllSessions(String patientId) async {
-    await _pool.execute(
+  Future<void> _revokeAllSessions(MySQLConnection conn, String patientId) async {
+    await conn.execute(
       'UPDATE patient_sessions SET revoked_at = NOW() '
       'WHERE ${uuidWhere('patient_id', 'patientId')} AND revoked_at IS NULL',
       {'patientId': patientId},
     );
   }
 
-  Future<void> setStatus(String patientId, String status) async {
-    await _pool.execute(
+  Future<void> _setStatus(MySQLConnection conn, String patientId, String status) async {
+    await conn.execute(
       'UPDATE patient_credentials SET status = :status '
       'WHERE ${uuidWhere('patient_id', 'patientId')}',
       {'patientId': patientId, 'status': status},
     );
   }
 
-  Future<void> insertAuditLog({
+  // ── Transactional actions — mutation + writeAudit on one connection ────────
+
+  Future<void> generateCredentialTx({
+    required bool isNew,
+    required String patientId,
+    String? credentialId,
+    required String phoneE164,
+    required String passwordHash,
+    required String activationPinHash,
+    required String actorId,
+  }) async {
+    await _pool.transactional((conn) async {
+      if (isNew) {
+        await _insertCredential(
+          conn,
+          credentialId: credentialId!,
+          patientId: patientId,
+          phoneE164: phoneE164,
+          passwordHash: passwordHash,
+          activationPinHash: activationPinHash,
+          mustChangePw: 1,
+        );
+      } else {
+        await _updateCredential(
+          conn,
+          patientId: patientId,
+          passwordHash: passwordHash,
+          activationPinHash: activationPinHash,
+          status: 'pending_activation',
+          mustChangePw: 0,
+        );
+        await _revokeAllSessions(conn, patientId);
+      }
+      await writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'PATIENT_CREDENTIALS_GENERATE',
+        targetType: 'patient_credentials',
+        targetIdUuid: patientId,
+      );
+    });
+  }
+
+  Future<void> resetCredentialTx({
+    required String patientId,
+    required String passwordHash,
+    required String activationPinHash,
+    required String actorId,
+  }) async {
+    await _pool.transactional((conn) async {
+      await _updateCredential(
+        conn,
+        patientId: patientId,
+        passwordHash: passwordHash,
+        activationPinHash: activationPinHash,
+        status: 'pending_activation',
+        mustChangePw: 1,
+      );
+      await _revokeAllSessions(conn, patientId);
+      await writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'PATIENT_CREDENTIALS_RESET',
+        targetType: 'patient_credentials',
+        targetIdUuid: patientId,
+      );
+    });
+  }
+
+  Future<void> suspendCredentialTx({
+    required String patientId,
+    required String actorId,
+  }) async {
+    await _pool.transactional((conn) async {
+      await _setStatus(conn, patientId, 'suspended');
+      await _revokeAllSessions(conn, patientId);
+      await writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'PATIENT_CREDENTIALS_SUSPEND',
+        targetType: 'patient_credentials',
+        targetIdUuid: patientId,
+      );
+    });
+  }
+
+  Future<void> reinstateCredentialTx({
+    required String patientId,
+    required String actorId,
+  }) async {
+    await _pool.transactional((conn) async {
+      await _setStatus(conn, patientId, 'active');
+      await writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: 'PATIENT_CREDENTIALS_REINSTATE',
+        targetType: 'patient_credentials',
+        targetIdUuid: patientId,
+      );
+    });
+  }
+
+  /// No mutation to pair with — a credential *view* is still a real,
+  /// auditable event, so it gets the canonical writer too, just without
+  /// anything else riding on the same transaction.
+  Future<void> auditOnly({
     required String actorId,
     required String patientId,
     required String action,
   }) async {
-    try {
-      await _pool.execute(
-        'INSERT INTO audit_log '
-        '(audit_id, user_id, actor_user_id, action_type, entity_type, request_id, action, target_type, target_id, details) '
-        'VALUES (${uuidParam('auditId')}, ${uuidParam('actorId')}, ${uuidParam('actorId')}, '
-        ':action, :targetType, \'\', '
-        ':action, :targetType, ${uuidParam('targetId')}, \'{}\')',
-        {
-          'auditId': generateUuid(),
-          'actorId': actorId,
-          'action': action,
-          'targetType': 'patient_credentials',
-          'targetId': patientId,
-        },
+    await _pool.transactional((conn) async {
+      await writeAudit(
+        conn: conn,
+        actorId: actorId,
+        action: action,
+        targetType: 'patient_credentials',
+        targetIdUuid: patientId,
       );
-    } catch (_) {
-      // Audit log failures are non-fatal
-    }
+    });
   }
 
   Map<String, dynamic> _rowToMap(ResultSetRow row) => rowToMap(row);

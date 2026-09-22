@@ -42,30 +42,14 @@ class PatientCredentialsService {
     final passwordHash = BCrypt.hashpw(generateUuid(), BCrypt.gensalt(logRounds: 12));
 
     final existing = await _repo.findByPatientId(patientId);
-    if (existing == null) {
-      await _repo.insertCredential(
-        credentialId: generateUuid(),
-        patientId: patientId,
-        phoneE164: phoneE164,
-        passwordHash: passwordHash,
-        activationPinHash: pinHash,
-        mustChangePw: 1,
-      );
-    } else {
-      await _repo.updateCredential(
-        patientId: patientId,
-        passwordHash: passwordHash,
-        activationPinHash: pinHash,
-        status: 'pending_activation',
-        mustChangePw: 0,
-      );
-      await _repo.revokeAllSessions(patientId);
-    }
-
-    await _repo.insertAuditLog(
-      actorId: actorId,
+    await _repo.generateCredentialTx(
+      isNew: existing == null,
       patientId: patientId,
-      action: 'PATIENT_CREDENTIALS_GENERATE',
+      credentialId: existing == null ? generateUuid() : null,
+      phoneE164: phoneE164,
+      passwordHash: passwordHash,
+      activationPinHash: pinHash,
+      actorId: actorId,
     );
 
     // Beneficiary's login-access journey reaches 'active' as soon as
@@ -110,7 +94,7 @@ class PatientCredentialsService {
     // Credential views are audited regardless of whether credentials exist
     // yet — an admin looking up a not-yet-provisioned beneficiary is still
     // a "viewed this beneficiary's credential state" event.
-    await _repo.insertAuditLog(
+    await _repo.auditOnly(
       actorId: actorId,
       patientId: patientId,
       action: 'PATIENT_CREDENTIALS_VIEW',
@@ -152,19 +136,11 @@ class PatientCredentialsService {
     final pinHash = BCrypt.hashpw(pin, BCrypt.gensalt(logRounds: 12));
     final passwordHash = BCrypt.hashpw(generateUuid(), BCrypt.gensalt(logRounds: 12));
 
-    await _repo.updateCredential(
+    await _repo.resetCredentialTx(
       patientId: patientId,
       passwordHash: passwordHash,
       activationPinHash: pinHash,
-      status: 'pending_activation',
-      mustChangePw: 1,
-    );
-    await _repo.revokeAllSessions(patientId);
-
-    await _repo.insertAuditLog(
       actorId: actorId,
-      patientId: patientId,
-      action: 'PATIENT_CREDENTIALS_RESET',
     );
 
     bool emailSent = false;
@@ -194,18 +170,11 @@ class PatientCredentialsService {
       throw ApiError.notFound('No credentials found for this patient');
     }
 
-    await _repo.setStatus(patientId, 'suspended');
-    await _repo.revokeAllSessions(patientId);
+    await _repo.suspendCredentialTx(patientId: patientId, actorId: actorId);
     final patient = await _repo.findPatientById(patientId);
     if (patient?['primary_account_id'] != null) {
       await _patientRepo.setLoginAccessStatus(patientId, 'suspended');
     }
-
-    await _repo.insertAuditLog(
-      actorId: actorId,
-      patientId: patientId,
-      action: 'PATIENT_CREDENTIALS_SUSPEND',
-    );
 
     return {'patient_id': patientId, 'status': 'suspended'};
   }
@@ -219,17 +188,11 @@ class PatientCredentialsService {
       throw ApiError.notFound('No credentials found for this patient');
     }
 
-    await _repo.setStatus(patientId, 'active');
+    await _repo.reinstateCredentialTx(patientId: patientId, actorId: actorId);
     final patient = await _repo.findPatientById(patientId);
     if (patient?['primary_account_id'] != null) {
       await _patientRepo.setLoginAccessStatus(patientId, 'active');
     }
-
-    await _repo.insertAuditLog(
-      actorId: actorId,
-      patientId: patientId,
-      action: 'PATIENT_CREDENTIALS_REINSTATE',
-    );
 
     return {'patient_id': patientId, 'status': 'active'};
   }
