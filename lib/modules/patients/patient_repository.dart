@@ -405,6 +405,121 @@ class PatientRepository {
     return created;
   }
 
+  // ── Corporate self-service roster CSV import ─────────────────────────────
+
+  /// Decrypts and returns every currently-live national ID already on file
+  /// for this corporate account's own beneficiaries — bounded to one
+  /// account's roster, not a global scan. nat_id_enc is a randomized cipher
+  /// (AES-GCM, random IV per call), so it can never be looked up by
+  /// equality; this is the only way to check "does this ID already exist
+  /// under this account" without a schema change (a blind-index column
+  /// would be more efficient at large scale — not built here since nothing
+  /// asked for a schema change and today's roster sizes don't need it).
+  Future<Set<String>> listOwnNationalIds(String primaryAccountId) async {
+    final result = await _pool.execute(
+      "SELECT nat_id_enc FROM patients "
+      "WHERE primary_account_id = UNHEX(REPLACE(:id, '-', '')) "
+      'AND deleted_at IS NULL AND nat_id_enc IS NOT NULL',
+      {'id': primaryAccountId},
+    );
+    final ids = <String>{};
+    for (final row in result.rows) {
+      final plain = await _pii.tryDecrypt(row.assoc()['nat_id_enc']);
+      if (plain != null) ids.add(plain);
+    }
+    return ids;
+  }
+
+  /// Partial-success insert for the corporate self-service CSV roster
+  /// import — every row that already passed PatientService
+  /// .bulkImportOwnRoster's validation gets its OWN transaction, so a late
+  /// DB-level failure on one row (e.g. a genuine race between two
+  /// concurrent uploads) never rolls back rows that already succeeded.
+  /// Deliberately NOT [bulkCreateSubPatients]'s one-shared-transaction
+  /// pattern above, which is correct for the admin-only all-or-nothing
+  /// import but would defeat partial-success here.
+  ///
+  /// [rows] entries: {row_number, full_name, phone?, national_id?} — every
+  /// row is inserted with relationship='employee', accountType='dependent'.
+  /// Returns one outcome per row: {row, imported: true} or
+  /// {row, imported: false, errors: [...]}.
+  Future<List<Map<String, dynamic>>> insertRosterRowsPartial({
+    required String primaryAccountId,
+    required List<Map<String, dynamic>> rows,
+    required String createdBy,
+  }) async {
+    final primary = await findById(primaryAccountId);
+    if (primary == null) throw ApiError.notFound('Patient not found');
+    final primaryCode = primary['patient_code'] as String? ?? '';
+
+    final outcomes = <Map<String, dynamic>>[];
+    var successCount = 0;
+
+    for (final row in rows) {
+      final rowNumber = row['row_number'] as int;
+      final id = generateUuid();
+      final suffix = id.replaceAll('-', '').substring(0, 4).toUpperCase();
+      final autoCode = primaryCode.isNotEmpty ? '$primaryCode-$suffix' : 'SUB-$suffix';
+      final phone = row['phone'] as String?;
+      final nationalId = row['national_id'] as String?;
+
+      // Pure crypto, no DB access — done before this row's own transaction,
+      // matching create()/bulkCreateSubPatients' existing convention.
+      final phoneEnc = phone != null ? await _pii.encrypt(phone) : null;
+      final nationalIdEnc = nationalId != null ? await _pii.encrypt(nationalId) : null;
+
+      try {
+        await _pool.transactional((conn) async {
+          await _insertPatientRow(
+            conn,
+            id: id,
+            patientCode: autoCode,
+            fullName: row['full_name'] as String,
+            phone: phone,
+            phoneEnc: phoneEnc,
+            nationalId: nationalId,
+            nationalIdEnc: nationalIdEnc,
+            accountType: 'dependent',
+            primaryAccountId: primaryAccountId,
+            relationship: 'employee',
+            idType: 'national_id',
+          );
+        });
+        successCount++;
+        outcomes.add({'row': rowNumber, 'imported': true});
+      } catch (e) {
+        final message = e.toString().contains('1062')
+            ? 'A record with this phone number or national ID was just created by another request'
+            : 'Failed to save this row';
+        outcomes.add({'row': rowNumber, 'imported': false, 'errors': [message]});
+      }
+    }
+
+    // One summary audit entry for the whole batch, written after the loop
+    // (not per-row) — matches bulkCreateSubPatients' one-entry-per-batch
+    // convention above.
+    try {
+      await _pool.transactional((conn) async {
+        await writeAudit(
+          conn: conn,
+          actorId: createdBy,
+          action: 'BULK_IMPORT_OWN_ROSTER',
+          targetType: 'patient',
+          targetIdUuid: primaryAccountId,
+          after: {
+            'row_count': rows.length,
+            'success_count': successCount,
+            'failed_count': rows.length - successCount,
+          },
+        );
+      });
+    } catch (_) {
+      // Audit failure is non-fatal — matches create()'s existing convention.
+    }
+
+    return outcomes;
+  }
+
   // ── Cost centres (corporate accounts) ────────────────────────────────────
 
   static final _costCentreSelect =

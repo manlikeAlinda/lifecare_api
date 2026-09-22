@@ -395,6 +395,143 @@ class PatientService {
     await _repo.softDeleteSubPatient(beneficiaryId);
   }
 
+  // ── Corporate self-service roster CSV import ─────────────────────────────
+  //
+  // Distinct from bulkImportRoster above (admin-only, JSON, all-or-nothing):
+  // caller is derived entirely from callerPatientId (the JWT subject) —
+  // there is no account-id parameter anywhere in this method, deliberately,
+  // matching PatientAnalyticsService._requireCorporateCaller's pattern, so
+  // a corporate session can never target a different account's roster.
+  // Partial-success: every row is validated up front (never short-circuits
+  // on the first bad row), and only rows that pass every check are handed
+  // to the repository, which inserts each independently so one row's
+  // failure never rolls back its siblings.
+  //
+  // national_id's format check below is NOT a ported rule — no such
+  // validator exists anywhere else in this codebase (manual single-
+  // beneficiary entry applies none at all). It's a new, deliberately
+  // conservative sanity check, since there's no verified national-ID format
+  // spec to encode correctly.
+  static final _nationalIdSanityRegex = RegExp(r'^[A-Za-z0-9]{4,20}$');
+
+  Future<Map<String, dynamic>> bulkImportOwnRoster(
+    String callerPatientId,
+    List<Map<String, dynamic>> rows,
+    String createdBy,
+  ) async {
+    final caller = await _repo.findById(callerPatientId);
+    if (caller == null) throw ApiError.notFound('Patient not found');
+    if (!isCorporatePrimaryRow(caller)) {
+      throw ApiError.forbidden(
+        'Roster import is only available to corporate account holders',
+      );
+    }
+
+    // national_id is encrypted at rest with a randomized cipher (AES-GCM,
+    // random IV per call) — nat_id_enc can never be looked up by equality,
+    // so the only way to check "does this ID already exist under this
+    // account" is to decrypt this account's own existing roster once,
+    // up front, and compare in memory. Bounded to one account's
+    // beneficiaries, not a global scan.
+    final existingNationalIds = await _repo.listOwnNationalIds(callerPatientId);
+    final seenPhones = <String>{};
+    final seenNationalIds = <String>{};
+
+    final valid = <Map<String, dynamic>>[];
+    final failures = <Map<String, dynamic>>[];
+
+    for (final row in rows) {
+      final rowNumber = row['row_number'] as int;
+      final errors = <String>[];
+
+      final fullName = (row['full_name'] as String? ?? '').trim();
+      if (fullName.isEmpty) {
+        errors.add('full_name is required');
+      } else if (fullName.length > 255) {
+        // patients.full_name is VARCHAR(255) — db/schema.sql.
+        errors.add('full_name must not exceed 255 characters');
+      }
+
+      // Validated, not silently overridden — every imported row still ends
+      // up relationship='employee' at insert time either way, but a value
+      // that isn't "Employee" (or blank) is a real data problem worth
+      // surfacing, not quietly discarding.
+      final relationship = (row['relationship'] as String? ?? '').trim();
+      if (relationship.isNotEmpty && relationship.toLowerCase() != 'employee') {
+        errors.add('relationship must be "Employee" (or left blank)');
+      }
+
+      final phoneRaw = (row['phone'] as String? ?? '').trim();
+      String? phone;
+      if (phoneRaw.isNotEmpty) {
+        if (!_phoneRegex.hasMatch(phoneRaw)) {
+          errors.add('phone must be in E.164 format (e.g. +256700000000)');
+        } else if (!seenPhones.add(phoneRaw)) {
+          errors.add('duplicate phone number within this file');
+        } else if (await _repo.phoneExists(phoneRaw)) {
+          errors.add('phone number is already registered');
+        } else {
+          phone = phoneRaw;
+        }
+      }
+
+      final nationalIdRaw = (row['national_id'] as String? ?? '').trim();
+      String? nationalId;
+      if (nationalIdRaw.isNotEmpty) {
+        if (!_nationalIdSanityRegex.hasMatch(nationalIdRaw)) {
+          errors.add('national_id must be 4-20 alphanumeric characters');
+        } else if (!seenNationalIds.add(nationalIdRaw)) {
+          errors.add('duplicate national_id within this file');
+        } else if (existingNationalIds.contains(nationalIdRaw)) {
+          errors.add('national_id already exists for this account');
+        } else {
+          nationalId = nationalIdRaw;
+        }
+      }
+
+      if (errors.isEmpty) {
+        valid.add({
+          'row_number': rowNumber,
+          'full_name': fullName,
+          'phone': phone,
+          'national_id': nationalId,
+        });
+      } else {
+        failures.add({'row': rowNumber, 'errors': errors});
+      }
+    }
+
+    final outcomes = valid.isEmpty
+        ? <Map<String, dynamic>>[]
+        : await _repo.insertRosterRowsPartial(
+            primaryAccountId: callerPatientId,
+            rows: valid,
+            createdBy: createdBy,
+          );
+
+    // Merge repository-level insert failures (rare races — e.g. the same
+    // national ID imported by two concurrent uploads) into the same
+    // failures list validation already produced, so the caller sees one
+    // unified report regardless of which phase rejected a row.
+    var importedCount = 0;
+    for (final outcome in outcomes) {
+      if (outcome['imported'] == true) {
+        importedCount++;
+      } else {
+        failures.add({'row': outcome['row'], 'errors': outcome['errors']});
+      }
+    }
+
+    failures.sort((a, b) => (a['row'] as int).compareTo(b['row'] as int));
+
+    return {
+      'total': rows.length,
+      'imported': importedCount,
+      'failed': rows.length - importedCount,
+      'failures': failures,
+    };
+  }
+
   // ── Beneficiary login access ────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> requestLoginAccess(

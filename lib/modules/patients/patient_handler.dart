@@ -1,4 +1,10 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:csv/csv.dart';
 import 'package:shelf/shelf.dart';
+import 'package:shelf_multipart/form_data.dart';
+import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/middleware/auth_middleware.dart';
 import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
@@ -172,6 +178,123 @@ class PatientHandler {
   ) async {
     final patient = requirePatientUser(request);
     final result = await _service.requestLoginAccess(patient.id, beneficiaryId);
+    return okResponse(result);
+  }
+
+  // ── Corporate self-service roster CSV bulk-import ───────────────────────
+  //
+  // Distinct from bulkImportRoster further below (admin-only, JSON body,
+  // all-or-nothing) — this is the corporate primary account holder's own
+  // self-service path: multipart/form-data upload, partial-success (valid
+  // rows commit even if others fail), authorization derived entirely from
+  // the caller's own patient JWT (PatientService.bulkImportOwnRoster
+  // rejects anyone who isn't that account's corporate primary).
+
+  static const _rosterCsvMaxBytes = 2 * 1024 * 1024; // 2 MB — no limit of
+  // any kind exists elsewhere in this server; this is the first one, and a
+  // deliberately conservative default for a CSV upload, not derived from
+  // an existing constraint.
+  static const _rosterCsvMaxRows = 1000;
+  static const _rosterCsvColumns = ['full_name', 'relationship', 'phone', 'national_id'];
+
+  Future<Response> bulkImportOwnRoster(Request request) async {
+    final patient = requirePatientUser(request);
+
+    if (!request.isMultipartForm) {
+      throw ApiError.validationError(
+        'Expected a multipart/form-data upload with a single "file" field',
+      );
+    }
+
+    // Content-Length is the fast path, checked before touching the body at
+    // all — but it can be absent or wrong, so the running byte counter
+    // below (while streaming the part) is the real guard against buffering
+    // an unbounded upload into memory.
+    final declaredLength = request.contentLength;
+    if (declaredLength != null && declaredLength > _rosterCsvMaxBytes) {
+      throw ApiError.validationError(
+        'File is too large — the roster CSV must not exceed '
+        '${_rosterCsvMaxBytes ~/ (1024 * 1024)} MB',
+      );
+    }
+
+    String? csvContent;
+
+    await for (final formData in request.multipartFormData) {
+      // Exactly one field, named "file", carrying an actual file (not a
+      // plain text field that happens to be named "file") — anything else
+      // is rejected rather than guessed at.
+      if (formData.name != 'file' || formData.filename == null || csvContent != null) {
+        throw ApiError.validationError('Expected exactly one file field named "file"');
+      }
+
+      final builder = BytesBuilder();
+      var total = 0;
+      await for (final chunk in formData.part) {
+        total += chunk.length;
+        if (total > _rosterCsvMaxBytes) {
+          throw ApiError.validationError(
+            'File is too large — the roster CSV must not exceed '
+            '${_rosterCsvMaxBytes ~/ (1024 * 1024)} MB',
+          );
+        }
+        builder.add(chunk);
+      }
+      csvContent = utf8.decode(builder.takeBytes());
+    }
+
+    if (csvContent == null) {
+      throw ApiError.validationError('No file was uploaded');
+    }
+
+    // shouldParseNumbers: false — otherwise an all-digit national_id or
+    // phone value gets silently parsed to an int, breaking every downstream
+    // String read.
+    final table = const CsvToListConverter(shouldParseNumbers: false).convert(csvContent);
+    if (table.isEmpty) {
+      throw ApiError.validationError('The uploaded file is empty');
+    }
+
+    final header = table.first.map((c) => c.toString().trim()).toList();
+    final headerMatches = header.length == _rosterCsvColumns.length &&
+        _rosterCsvColumns.every(header.contains);
+    if (!headerMatches) {
+      throw ApiError.validationError(
+        'CSV header must be exactly: ${_rosterCsvColumns.join(', ')}',
+      );
+    }
+    final colIndex = {for (final name in header) name: header.indexOf(name)};
+
+    // Drop fully-blank rows (a trailing newline in an Excel export is the
+    // common real-world case) before they're mistaken for a genuine row
+    // missing every field.
+    final dataRows = table
+        .skip(1)
+        .where((row) => row.any((cell) => cell != null && cell.toString().trim().isNotEmpty))
+        .toList();
+
+    if (dataRows.isEmpty) {
+      throw ApiError.validationError('The uploaded file has no data rows');
+    }
+    if (dataRows.length > _rosterCsvMaxRows) {
+      throw ApiError.validationError(
+        'The uploaded file must not exceed $_rosterCsvMaxRows rows',
+      );
+    }
+
+    final rows = <Map<String, dynamic>>[
+      for (var i = 0; i < dataRows.length; i++)
+        {
+          'row_number': i + 2, // header is row 1, matching how a
+          // spreadsheet-literate uploader actually counts.
+          'full_name': dataRows[i][colIndex['full_name']!]?.toString(),
+          'relationship': dataRows[i][colIndex['relationship']!]?.toString(),
+          'phone': dataRows[i][colIndex['phone']!]?.toString(),
+          'national_id': dataRows[i][colIndex['national_id']!]?.toString(),
+        },
+    ];
+
+    final result = await _service.bulkImportOwnRoster(patient.id, rows, patient.id);
     return okResponse(result);
   }
 

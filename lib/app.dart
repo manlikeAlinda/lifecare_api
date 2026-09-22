@@ -856,6 +856,15 @@ Handler buildApp() {
       (Request req) => patientHandler.requestBeneficiaryLoginAccess(req, req.params['id']!),
     ),
   );
+  // Corporate self-service roster CSV bulk-import — patient-token-gated,
+  // no account-id route param (derived entirely from the caller's own JWT,
+  // same IDOR-safe pattern as the /v1/patient/analytics/* routes below).
+  // Distinct from the admin-only, JSON, all-or-nothing
+  // POST /v1/patients/<id>/roster/bulk-import further down.
+  router.post(
+    '/v1/patient/beneficiaries/roster/bulk-import',
+    Pipeline().addMiddleware(patientAuth2).addHandler(patientHandler.bulkImportOwnRoster),
+  );
   router.get(
     '/v1/patient/beneficiaries/<id>/visits',
     Pipeline().addMiddleware(patientAuth2).addHandler((Request req) async {
