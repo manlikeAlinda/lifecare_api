@@ -66,6 +66,7 @@ class PatientAuthHandler {
       phone: body['phone'] as String,
       password: body['password'] as String,
       expectBeneficiary: false,
+      surface: body['surface'] as String?,
     );
 
     return okResponse(result);
@@ -73,7 +74,9 @@ class PatientAuthHandler {
 
   /// Distinct beneficiary login path — same handler shape as login(), just
   /// dispatches to the same service method with the opposite account-type
-  /// expectation. No password/session logic duplicated here.
+  /// expectation. No password/session logic duplicated here. [surface], if
+  /// supplied, lets the service reject a beneficiary attempting this from
+  /// anywhere but the mobile app — see login()'s doc comment.
   Future<Response> beneficiaryLogin(Request request) async {
     final body = await parseJsonBody(request);
 
@@ -86,6 +89,7 @@ class PatientAuthHandler {
       phone: body['phone'] as String,
       password: body['password'] as String,
       expectBeneficiary: true,
+      surface: body['surface'] as String?,
     );
 
     return okResponse(result);

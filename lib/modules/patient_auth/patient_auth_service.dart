@@ -68,10 +68,21 @@ class PatientAuthService {
   /// what the suspended-account branch already reveals) but before any
   /// tokens are issued. Both flows share this one implementation so
   /// password/bcrypt/session/audit logic can never drift between them.
+  ///
+  /// [surface] is an optional, client-declared value ("web"/"mobile") —
+  /// enforced ONLY on the beneficiary flow (primary account holders are
+  /// intentionally allowed on either surface). A beneficiary is rejected
+  /// outright if they declare anything but "mobile"; a MISSING surface is
+  /// allowed, deliberately, so an existing mobile client that doesn't send
+  /// this field yet keeps working. This is real defense-in-depth for a
+  /// client that identifies itself truthfully (e.g. the web dashboard) —
+  /// not a cryptographic guarantee against a deliberately falsified raw API
+  /// call, since it's just a client-supplied string.
   Future<Map<String, dynamic>> login({
     required String phone,
     required String password,
     required bool expectBeneficiary,
+    String? surface,
   }) async {
     final credential = await _repo.findByPhone(phone);
     if (credential == null) {
@@ -119,6 +130,14 @@ class PatientAuthService {
       throw ApiError.forbidden(expectBeneficiary
           ? 'This phone number belongs to a primary account. Use the primary login.'
           : 'This phone number belongs to a beneficiary account. Use the beneficiary login.');
+    }
+
+    // Beneficiaries are mobile-only — a primary needs no such restriction.
+    // See this method's doc comment for what "surface" can and can't
+    // actually guarantee.
+    if (expectBeneficiary && surface != null && surface != 'mobile') {
+      await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_LOGIN_WRONG_SURFACE');
+      throw ApiError.forbidden('Beneficiary accounts can only sign in from the mobile app.');
     }
 
     // TOTP-enabled accounts don't get full tokens on password verification
