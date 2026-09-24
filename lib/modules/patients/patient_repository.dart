@@ -998,7 +998,22 @@ class PatientRepository {
           {'id': id},
         );
 
-        // 4. Sub-patients first (FK), then primary.
+        // 4. beneficiary_account_links (migration 042) FKs to patients with
+        // no ON DELETE clause (RESTRICT by default) — a hard delete of this
+        // account or any of its sub-patients would otherwise fail the FK
+        // check on the patients DELETE below. Clear both directions (this
+        // row as the primary account, and as a linked beneficiary) for
+        // every id being removed.
+        for (final pid in [id, ...subIds]) {
+          await conn.execute(
+            "DELETE FROM beneficiary_account_links "
+            "WHERE primary_account_id = UNHEX(REPLACE(:pid, '-', '')) "
+            "   OR beneficiary_patient_id = UNHEX(REPLACE(:pid, '-', ''))",
+            {'pid': pid},
+          );
+        }
+
+        // 5. Sub-patients first (FK), then primary.
         await conn.execute(
           "DELETE FROM patients WHERE primary_account_id = UNHEX(REPLACE(:id, '-', ''))",
           {'id': id},
