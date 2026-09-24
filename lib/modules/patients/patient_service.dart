@@ -204,6 +204,12 @@ class PatientService {
   ) async {
     final primary = await _repo.findById(primaryAccountId);
     if (primary == null) throw ApiError.notFound('Patient not found');
+    // Beneficiaries can never have beneficiaries of their own.
+    if (isBeneficiaryRow(primary)) {
+      throw ApiError.validationError(
+        'A beneficiary cannot have beneficiaries. Add them to the primary account instead.',
+      );
+    }
 
     final primaryCode = primary['patient_code'] as String? ?? '';
     final id = generateUuid();
@@ -445,7 +451,7 @@ class PatientService {
   ) async {
     final requester = await _repo.findById(requestingPatientId);
     if (requester == null) throw ApiError.notFound('Patient not found');
-    if (requester['primary_account_id'] != null) {
+    if (isBeneficiaryRow(requester)) {
       throw ApiError.forbidden('Only the primary account holder can manage beneficiaries');
     }
     final email = (data['email'] as String?)?.trim() ?? '';
@@ -466,7 +472,7 @@ class PatientService {
   ) async {
     final requester = await _repo.findById(requestingPatientId);
     if (requester == null) throw ApiError.notFound('Patient not found');
-    if (requester['primary_account_id'] != null) {
+    if (isBeneficiaryRow(requester)) {
       throw ApiError.forbidden('Only the primary account holder can manage beneficiaries');
     }
     final beneficiary = await _repo.findById(beneficiaryId);
@@ -497,7 +503,7 @@ class PatientService {
   ) async {
     final requester = await _repo.findById(requestingPatientId);
     if (requester == null) throw ApiError.notFound('Patient not found');
-    if (requester['primary_account_id'] != null) {
+    if (isBeneficiaryRow(requester)) {
       throw ApiError.forbidden('Only the primary account holder can manage beneficiaries');
     }
 
@@ -659,7 +665,7 @@ class PatientService {
   ) async {
     final requester = await _repo.findById(requestingPatientId);
     if (requester == null) throw ApiError.notFound('Patient not found');
-    if (requester['primary_account_id'] != null) {
+    if (isBeneficiaryRow(requester)) {
       throw ApiError.forbidden('Only the primary account holder can request login access');
     }
 

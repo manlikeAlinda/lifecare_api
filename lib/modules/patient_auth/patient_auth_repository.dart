@@ -32,7 +32,10 @@ class PatientAuthRepository {
     // UTF-8, so a raw binary select here throws a FormatException that
     // poisons the pooled connection.
     final result = await _pool.execute(
-      "SELECT (primary_account_id IS NOT NULL) AS is_beneficiary FROM patients "
+      // Same rule as isBeneficiaryRow: a removed beneficiary (link cleared,
+      // account_type still 'dependent') is still a beneficiary.
+      "SELECT (primary_account_id IS NOT NULL OR account_type = 'dependent') "
+      'AS is_beneficiary FROM patients '
       "WHERE ${uuidWhere('patient_id', 'patientId')} LIMIT 1",
       {'patientId': patientId},
     );

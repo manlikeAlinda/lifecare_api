@@ -4,8 +4,15 @@
 /// Single source of truth — replaces the copy-pasted
 /// `requester?['primary_account_id'] != null` checks that used to be
 /// scattered across lib/app.dart and patient_service.dart.
+///
+/// A beneficiary stays a beneficiary after being removed from an account
+/// (primary_account_id is cleared on unlink, account_type stays
+/// 'dependent'), so both are checked: a removed beneficiary must never be
+/// treated as a primary account holder — in particular, beneficiaries can
+/// never have beneficiaries of their own.
 bool isBeneficiaryRow(Map<String, dynamic>? patientRow) =>
-    patientRow?['primary_account_id'] != null;
+    patientRow?['primary_account_id'] != null ||
+    patientRow?['account_type'] == 'dependent';
 
 /// True when [patientRow] is a corporate account's own primary holder
 /// (never a beneficiary — a corporate account's beneficiaries carry
