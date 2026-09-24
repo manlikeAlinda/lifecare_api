@@ -133,7 +133,7 @@ class PatientHandler {
         'relationship': p['relationship'] ?? '',
         'nationalId': p['national_id'] ?? '',
         'phone': p['phone_e164'] ?? '',
-        'email': '',
+        'email': p['email'] ?? '',
         'status': (p['is_active'] == true || p['is_active'] == 1) ? 'active' : 'inactive',
         'addedOn': p['created_at']?.toString() ?? '',
         'isMinor': p['is_minor'] == true,
@@ -149,13 +149,19 @@ class PatientHandler {
     );
   }
 
+  /// The mobile form sends '' for a field left blank; treat that as "not
+  /// provided" so optional fields (email) don't fail format validation.
+  Map<String, dynamic> _withoutBlankStrings(Map<String, dynamic> body) =>
+      Map.of(body)..removeWhere((_, v) => v is String && v.trim().isEmpty);
+
   Future<Response> createBeneficiary(Request request) async {
     final patient = requirePatientUser(request);
-    final body = await parseJsonBody(request);
+    final body = _withoutBlankStrings(await parseJsonBody(request));
 
     Validator(body)
       ..required('name')
       ..required('relationship')
+      ..email('email', optional: true)
       ..throwIfInvalid();
 
     final beneficiary = await _service.createOwnBeneficiary(patient.id, {
@@ -163,9 +169,34 @@ class PatientHandler {
       'relationship': body['relationship'],
       'national_id': body['nationalId'],
       'phone': body['phone'],
+      'email': body['email'],
       'is_minor': body['isMinor'] == true,
     });
     return createdResponse(_toBeneficiaryJson(beneficiary));
+  }
+
+  Future<Response> updateBeneficiary(Request request, String beneficiaryId) async {
+    final patient = requirePatientUser(request);
+    final raw = await parseJsonBody(request);
+    // Name/relationship can't be blanked out; check before blank-stripping.
+    final required = Validator(raw);
+    for (final field in ['name', 'relationship']) {
+      if (raw.containsKey(field)) required.required(field);
+    }
+    required.throwIfInvalid();
+    final body = _withoutBlankStrings(raw);
+    Validator(body)
+      ..email('email', optional: true)
+      ..throwIfInvalid();
+
+    final beneficiary = await _service.updateOwnBeneficiary(patient.id, beneficiaryId, {
+      'full_name': body['name'],
+      'relationship': body['relationship'],
+      'national_id': body['nationalId'],
+      'phone': body['phone'],
+      'email': body['email'],
+    });
+    return okResponse(_toBeneficiaryJson(beneficiary));
   }
 
   Future<Response> deleteBeneficiary(Request request, String beneficiaryId) async {

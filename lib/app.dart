@@ -844,6 +844,12 @@ Handler buildApp() {
     '/v1/patient/beneficiaries',
     Pipeline().addMiddleware(patientAuth2).addHandler(patientHandler.createBeneficiary),
   );
+  router.patch(
+    '/v1/patient/beneficiaries/<id>',
+    Pipeline().addMiddleware(patientAuth2).addHandler(
+      (Request req) => patientHandler.updateBeneficiary(req, req.params['id']!),
+    ),
+  );
   router.post(
     '/v1/patient/beneficiaries/<id>/delete',
     Pipeline().addMiddleware(patientAuth2).addHandler(

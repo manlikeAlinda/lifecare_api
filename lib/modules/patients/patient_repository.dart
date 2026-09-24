@@ -94,7 +94,14 @@ class PatientRepository {
     String? search,
     bool? activeOnly, // null = all, true = active only, false = inactive only
   }) async {
-    final conditions = <String>['primary_account_id IS NULL', 'deleted_at IS NULL'];
+    // account_type <> 'dependent': a removed beneficiary has
+    // primary_account_id cleared, but it is still a beneficiary record, not
+    // a primary account — without this it would surface here as one.
+    final conditions = <String>[
+      'primary_account_id IS NULL',
+      "account_type <> 'dependent'",
+      'deleted_at IS NULL',
+    ];
 
     // countParams only contains params that appear in the WHERE clause.
     final countParams = <String, dynamic>{};
@@ -159,7 +166,72 @@ class PatientRepository {
       'ORDER BY full_name',
       {'id': primaryAccountId},
     );
-    return _withDecryptedTinList(result.rows.map(_rowToMap).toList());
+    final rows = await _withDecryptedTinList(result.rows.map(_rowToMap).toList());
+    // A roster is a handful of rows, so one email lookup per row is fine.
+    return Future.wait(rows.map(_withDecryptedEmail));
+  }
+
+  /// email has no plaintext column, so it can only be stored encrypted. Throws
+  /// rather than silently skipping the write when encryption isn't
+  /// configured — a save must never report success without persisting.
+  Future<String> encryptEmail(String email) async {
+    final enc = await _pii.encrypt(email);
+    if (enc == null) {
+      throw ApiError.validationError(
+        'Email cannot be saved: PII encryption is not configured on this server.',
+      );
+    }
+    return enc;
+  }
+
+  Future<void> setEmail(String id, String email) async {
+    await _pool.execute(
+      "UPDATE patients SET email_enc = :emailEnc WHERE ${uuidWhere('patient_id', 'id')}",
+      {'id': id, 'emailEnc': await encryptEmail(email)},
+    );
+  }
+
+  /// Updates the fields a primary account holder may edit on their own
+  /// beneficiary. Only these keys ever reach [update] — never is_active,
+  /// account_type, is_minor or login-access state. relationship is also
+  /// mirrored onto the active beneficiary_account_links row.
+  Future<Map<String, dynamic>?> updateBeneficiary(
+    String id, {
+    required String updatedBy,
+    String? fullName,
+    String? relationship,
+    String? nationalId,
+    String? phone,
+    String? email,
+  }) async {
+    // Encrypt first: if email can't be stored, fail before anything else is
+    // written, so a rejected save never leaves a partial update behind.
+    final emailEnc =
+        (email != null && email.isNotEmpty) ? await encryptEmail(email) : null;
+    await update(
+      id,
+      {
+        if (fullName != null) 'full_name': fullName,
+        if (relationship != null) 'relationship': relationship,
+        if (nationalId != null) 'national_id': nationalId,
+        if (phone != null) 'phone_e164': phone,
+      },
+      updatedBy,
+    );
+    if (relationship != null) {
+      await _pool.execute(
+        'UPDATE beneficiary_account_links SET relationship = :relationship '
+        "WHERE ${uuidWhere('beneficiary_patient_id', 'id')} AND unlinked_at IS NULL",
+        {'id': id, 'relationship': relationship},
+      );
+    }
+    if (emailEnc != null) {
+      await _pool.execute(
+        "UPDATE patients SET email_enc = :emailEnc WHERE ${uuidWhere('patient_id', 'id')}",
+        {'id': id, 'emailEnc': emailEnc},
+      );
+    }
+    return findById(id);
   }
 
   // ── Create ─────────────────────────────────────────────────────────────────
@@ -845,11 +917,8 @@ class PatientRepository {
       }
     }
     if (email != null && email.isNotEmpty) {
-      final enc = await _pii.encrypt(email);
-      if (enc != null) {
-        setClauseParts.add('email_enc = :emailEnc');
-        params['emailEnc'] = enc;
-      }
+      setClauseParts.add('email_enc = :emailEnc');
+      params['emailEnc'] = await encryptEmail(email);
     }
 
     if (setClauseParts.isEmpty) return findById(id);
@@ -929,120 +998,84 @@ class PatientRepository {
     return {'processed': processed, 'remaining': remaining};
   }
 
-  /// Hard-deletes a patient and ALL related records.
+  /// Soft-deletes a patient account. Never DELETEs clinical or financial
+  /// rows: encounters, encounter_services/medications/drugs, wallet_ledger,
+  /// provider_transactions and the wallet itself all stay intact and
+  /// queryable for accounting/archive.
   ///
-  /// Delete order (avoids FK violations):
-  ///   1. patient_sessions + patient_credentials (sub-patients + primary)
-  ///   2. encounters (cascade-deletes encounter_services/medications/drugs)
-  ///   3. legacy dependents rows referencing this wallet (fk_dep_wallet)
-  ///   4. wallet_ledger + provider_transactions + wallets
-  ///   5. sub-patients, then the primary patient row
-  Future<void> hardDelete(String id) async {
-    try {
-      await _pool.transactional((conn) async {
-        // 1. Collect sub-patient UUIDs using a parameterized query.
-        final subResult = await conn.execute(
-          "SELECT LOWER(CONCAT(SUBSTR(HEX(patient_id),1,8),'-',SUBSTR(HEX(patient_id),9,4),'-',"
-          "SUBSTR(HEX(patient_id),13,4),'-',SUBSTR(HEX(patient_id),17,4),'-',"
-          "SUBSTR(HEX(patient_id),21))) AS pid "
-          "FROM patients WHERE primary_account_id = UNHEX(REPLACE(:id, '-', ''))",
-          {'id': id},
-        );
-        final subIds = subResult.rows
-            .map((r) => r.assoc()['pid'] ?? '')
-            .where((s) => s.isNotEmpty)
-            .toList();
+  /// In one transaction:
+  ///   1. Sets deleted_at/deleted_by on the account and on each of its
+  ///      active beneficiaries (primary_account_id is kept, so the family
+  ///      grouping stays visible in the archive).
+  ///   2. Ends every active link involving those rows (unlinked_at/by).
+  ///   3. Closes the wallet (status CLOSED) so it can't be spent from.
+  ///   4. Removes login credentials and sessions for every soft-deleted
+  ///      row — access, not history. With no credential row, the patient
+  ///      auth middleware rejects any token that is already issued.
+  ///   5. Writes a DELETE_PATIENT audit entry naming every affected id.
+  Future<void> softDelete(String id, {required String deletedBy}) async {
+    await _pool.transactional((conn) async {
+      final subResult = await conn.execute(
+        "SELECT LOWER(CONCAT(SUBSTR(HEX(patient_id),1,8),'-',SUBSTR(HEX(patient_id),9,4),'-',"
+        "SUBSTR(HEX(patient_id),13,4),'-',SUBSTR(HEX(patient_id),17,4),'-',"
+        "SUBSTR(HEX(patient_id),21))) AS pid "
+        "FROM patients WHERE ${uuidWhere('primary_account_id', 'id')} AND deleted_at IS NULL",
+        {'id': id},
+      );
+      final subIds = subResult.rows
+          .map((r) => r.assoc()['pid'] ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
 
-        for (final pid in [id, ...subIds]) {
-          await conn.execute(
-            "DELETE FROM patient_sessions WHERE patient_id = UNHEX(REPLACE(:pid, '-', ''))",
-            {'pid': pid},
-          );
-          await conn.execute(
-            "DELETE FROM patient_credentials WHERE patient_id = UNHEX(REPLACE(:pid, '-', ''))",
-            {'pid': pid},
-          );
-          // encounter_services/medications/drugs cascade from encounter.
-          await conn.execute(
-            "DELETE FROM encounters WHERE patient_id = UNHEX(REPLACE(:pid, '-', ''))",
-            {'pid': pid},
-          );
-        }
-
-        // 2. Legacy dependents rows still referencing this wallet (migration
-        // 021 kept them around for audit/FK history after converting
-        // dependents to real patient rows — fk_dep_wallet has no ON DELETE
-        // clause, so it blocks the wallet delete below unless cleared first).
+      for (final pid in [id, ...subIds]) {
         await conn.execute(
-          "DELETE d FROM dependents d "
-          "INNER JOIN wallets w ON d.wallet_id = w.wallet_id "
-          "WHERE w.primary_patient_id = UNHEX(REPLACE(:id, '-', ''))",
-          {'id': id},
-        );
-
-        // 3. Wallet chain (primary account only; sub-patients share it).
-        await conn.execute(
-          "DELETE wl FROM wallet_ledger wl "
-          "INNER JOIN wallets w ON wl.wallet_id = w.wallet_id "
-          "WHERE w.primary_patient_id = UNHEX(REPLACE(:id, '-', ''))",
-          {'id': id},
+          'UPDATE patients SET deleted_at = NOW(6), '
+          "deleted_by = ${uuidParam('deletedBy')} "
+          "WHERE ${uuidWhere('patient_id', 'pid')} AND deleted_at IS NULL",
+          {'pid': pid, 'deletedBy': deletedBy},
         );
         await conn.execute(
-          "DELETE pt FROM provider_transactions pt "
-          "INNER JOIN wallets w ON pt.wallet_id = w.wallet_id "
-          "WHERE w.primary_patient_id = UNHEX(REPLACE(:id, '-', ''))",
-          {'id': id},
+          'UPDATE beneficiary_account_links SET unlinked_at = NOW(6), '
+          "unlinked_by = ${uuidParam('deletedBy')} "
+          "WHERE (${uuidWhere('beneficiary_patient_id', 'pid')} "
+          "   OR ${uuidWhere('primary_account_id', 'pid')}) "
+          'AND unlinked_at IS NULL',
+          {'pid': pid, 'deletedBy': deletedBy},
         );
         await conn.execute(
-          "DELETE FROM wallets WHERE primary_patient_id = UNHEX(REPLACE(:id, '-', ''))",
-          {'id': id},
-        );
-
-        // 4. beneficiary_account_links (migration 042) FKs to patients with
-        // no ON DELETE clause (RESTRICT by default) — a hard delete of this
-        // account or any of its sub-patients would otherwise fail the FK
-        // check on the patients DELETE below. Clear both directions (this
-        // row as the primary account, and as a linked beneficiary) for
-        // every id being removed.
-        for (final pid in [id, ...subIds]) {
-          await conn.execute(
-            "DELETE FROM beneficiary_account_links "
-            "WHERE primary_account_id = UNHEX(REPLACE(:pid, '-', '')) "
-            "   OR beneficiary_patient_id = UNHEX(REPLACE(:pid, '-', ''))",
-            {'pid': pid},
-          );
-        }
-
-        // 5. Sub-patients first (FK), then primary.
-        await conn.execute(
-          "DELETE FROM patients WHERE primary_account_id = UNHEX(REPLACE(:id, '-', ''))",
-          {'id': id},
+          "DELETE FROM patient_sessions WHERE ${uuidWhere('patient_id', 'pid')}",
+          {'pid': pid},
         );
         await conn.execute(
-          "DELETE FROM patients WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
-          {'id': id},
+          "DELETE FROM patient_credentials WHERE ${uuidWhere('patient_id', 'pid')}",
+          {'pid': pid},
         );
-      });
-    } catch (e) {
-      if (e.toString().contains('1062')) {
-        final field = e.toString().contains('patient_code')
-            ? 'Account Code'
-            : 'Phone Number';
-        throw ApiError.conflict('$field is already in use by another patient');
       }
-      rethrow;
-    }
+
+      await conn.execute(
+        "UPDATE wallets SET status = 'CLOSED' "
+        "WHERE ${uuidWhere('primary_patient_id', 'id')}",
+        {'id': id},
+      );
+
+      await writeAudit(
+        conn: conn,
+        actorId: deletedBy,
+        action: 'DELETE_PATIENT',
+        targetType: 'patient',
+        targetIdUuid: id,
+        after: {'soft_deleted_beneficiaries': subIds},
+      );
+    });
   }
 
-  /// Removes a beneficiary from a primary account's roster. Unlike the old
-  /// softDeleteSubPatient (retired — used to set patients.deleted_at on the
-  /// beneficiary's own row), this never touches the beneficiary's clinical/
-  /// financial identity at all: encounters, encounter_services,
-  /// encounter_medications, and wallet_ledger all still reference
-  /// patient_id, untouched. Only the relationship — beneficiary_account_links
-  /// — is hard-deleted; no deleted_at/is_active flag is ever set on it or on
-  /// the beneficiary's patients row. patients.primary_account_id is cleared
-  /// as a denormalized cache update, not the removal itself.
+  /// Removes a beneficiary from a primary account's roster by ending the
+  /// link (beneficiary_account_links.unlinked_at/unlinked_by — the row is
+  /// kept, so link history stays queryable). The beneficiary's own patients
+  /// row and everything referencing it — encounters, encounter_services,
+  /// encounter_medications, wallet_ledger — is untouched.
+  /// patients.primary_account_id is cleared as a denormalized cache update
+  /// (roster reads use it); the ended link row is the durable record.
   Future<void> unlinkBeneficiary({
     required String beneficiaryId,
     required String primaryAccountId,
@@ -1050,10 +1083,16 @@ class PatientRepository {
   }) async {
     await _pool.transactional((conn) async {
       await conn.execute(
-        'DELETE FROM beneficiary_account_links '
+        'UPDATE beneficiary_account_links SET unlinked_at = NOW(6), '
+        "unlinked_by = ${uuidParam('unlinkedBy')} "
         "WHERE ${uuidWhere('beneficiary_patient_id', 'beneficiaryId')} "
-        "AND ${uuidWhere('primary_account_id', 'primaryAccountId')}",
-        {'beneficiaryId': beneficiaryId, 'primaryAccountId': primaryAccountId},
+        "AND ${uuidWhere('primary_account_id', 'primaryAccountId')} "
+        'AND unlinked_at IS NULL',
+        {
+          'beneficiaryId': beneficiaryId,
+          'primaryAccountId': primaryAccountId,
+          'unlinkedBy': unlinkedBy,
+        },
       );
       await conn.execute(
         'UPDATE patients SET primary_account_id = NULL '

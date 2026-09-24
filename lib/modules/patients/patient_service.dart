@@ -178,14 +178,14 @@ class PatientService {
     for (final id in ids) {
       final patient = await _repo.findById(id);
       if (patient == null) continue; // skip already-deleted
-      await _repo.hardDelete(id);
+      await _repo.softDelete(id, deletedBy: deletedBy);
     }
   }
 
   Future<void> deletePatient(String id, String deletedBy) async {
     final patient = await _repo.findById(id);
     if (patient == null) throw ApiError.notFound('Patient not found');
-    await _repo.hardDelete(id);
+    await _repo.softDelete(id, deletedBy: deletedBy);
   }
 
   // ── Sub-patients (beneficiaries) ────────────────────────────────────────────
@@ -448,7 +448,45 @@ class PatientService {
     if (requester['primary_account_id'] != null) {
       throw ApiError.forbidden('Only the primary account holder can manage beneficiaries');
     }
-    return createSubPatient(requestingPatientId, data, requestingPatientId);
+    final email = (data['email'] as String?)?.trim() ?? '';
+    // Fail before creating anything if the email can't be stored, so a
+    // create never half-succeeds (row saved, email silently dropped).
+    if (email.isNotEmpty) await _repo.encryptEmail(email);
+    final created =
+        await createSubPatient(requestingPatientId, data, requestingPatientId);
+    if (email.isEmpty) return created;
+    await _repo.setEmail(created['id'] as String, email);
+    return (await _repo.findById(created['id'] as String))!;
+  }
+
+  Future<Map<String, dynamic>> updateOwnBeneficiary(
+    String requestingPatientId,
+    String beneficiaryId,
+    Map<String, dynamic> data,
+  ) async {
+    final requester = await _repo.findById(requestingPatientId);
+    if (requester == null) throw ApiError.notFound('Patient not found');
+    if (requester['primary_account_id'] != null) {
+      throw ApiError.forbidden('Only the primary account holder can manage beneficiaries');
+    }
+    final beneficiary = await _repo.findById(beneficiaryId);
+    if (beneficiary == null) throw ApiError.notFound('Beneficiary not found');
+    if (beneficiary['primary_account_id'] != requestingPatientId) {
+      throw ApiError.forbidden();
+    }
+
+    String? trimmed(String key) => (data[key] as String?)?.trim();
+    final updated = await _repo.updateBeneficiary(
+      beneficiaryId,
+      updatedBy: requestingPatientId,
+      fullName: trimmed('full_name'),
+      relationship: trimmed('relationship'),
+      nationalId: trimmed('national_id'),
+      phone: trimmed('phone'),
+      email: trimmed('email'),
+    );
+    if (updated == null) throw ApiError.notFound('Beneficiary not found');
+    return updated;
   }
 
   Future<void> deleteOwnBeneficiary(
