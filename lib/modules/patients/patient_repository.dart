@@ -1111,9 +1111,22 @@ class PatientRepository {
           'unlinkedBy': unlinkedBy,
         },
       );
+      // Login access came from being on this account: without it a removed
+      // beneficiary (primary_account_id now NULL) would sign in looking
+      // like a primary account holder with no wallet. Credentials/sessions
+      // are access, not history — removing them also rejects any token
+      // already issued (the patient auth middleware requires a credential).
       await conn.execute(
-        'UPDATE patients SET primary_account_id = NULL '
+        "UPDATE patients SET primary_account_id = NULL, login_access_status = 'no_login' "
         "WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
+        {'beneficiaryId': beneficiaryId},
+      );
+      await conn.execute(
+        "DELETE FROM patient_sessions WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
+        {'beneficiaryId': beneficiaryId},
+      );
+      await conn.execute(
+        "DELETE FROM patient_credentials WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
         {'beneficiaryId': beneficiaryId},
       );
       await writeAudit(
