@@ -78,10 +78,17 @@ class PatientAuthService {
   /// client that identifies itself truthfully (e.g. the web dashboard) —
   /// not a cryptographic guarantee against a deliberately falsified raw API
   /// call, since it's just a client-supplied string.
+  ///
+  /// A null [expectBeneficiary] is the single login used by the mobile app:
+  /// either account type is accepted and the client learns which from the
+  /// profile afterwards. On that path a beneficiary must declare
+  /// surface "mobile" — a missing surface is NOT enough — so a client that
+  /// never sends the field (e.g. the web dashboard) still can't sign a
+  /// beneficiary in.
   Future<Map<String, dynamic>> login({
     required String phone,
     required String password,
-    required bool expectBeneficiary,
+    required bool? expectBeneficiary,
     String? surface,
   }) async {
     final credential = await _repo.findByPhone(phone);
@@ -125,7 +132,7 @@ class PatientAuthService {
     // verifyTotpLogin() is intentionally type-agnostic and would otherwise
     // let a TOTP-enabled account slip through the wrong endpoint.
     final isBeneficiary = await _repo.isBeneficiary(patientId);
-    if (isBeneficiary != expectBeneficiary) {
+    if (expectBeneficiary != null && isBeneficiary != expectBeneficiary) {
       await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_LOGIN_WRONG_FLOW');
       throw ApiError.forbidden(expectBeneficiary
           ? 'This phone number belongs to a primary account. Use the primary login.'
@@ -135,7 +142,10 @@ class PatientAuthService {
     // Beneficiaries are mobile-only — a primary needs no such restriction.
     // See this method's doc comment for what "surface" can and can't
     // actually guarantee.
-    if (expectBeneficiary && surface != null && surface != 'mobile') {
+    final wrongSurface = expectBeneficiary == null
+        ? surface != 'mobile'
+        : surface != null && surface != 'mobile';
+    if (isBeneficiary && wrongSurface) {
       await _repo.insertAuditLog(patientId: patientId, action: 'PATIENT_LOGIN_WRONG_SURFACE');
       throw ApiError.forbidden('Beneficiary accounts can only sign in from the mobile app.');
     }

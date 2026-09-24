@@ -62,21 +62,22 @@ class PatientAuthHandler {
       ..required('password')
       ..throwIfInvalid();
 
+    // Single login: accepts primary and beneficiary accounts alike (a
+    // beneficiary only with surface "mobile" — see PatientAuthService.login).
     final result = await _service.login(
       phone: body['phone'] as String,
       password: body['password'] as String,
-      expectBeneficiary: false,
+      expectBeneficiary: null,
       surface: body['surface'] as String?,
     );
 
     return okResponse(result);
   }
 
-  /// Distinct beneficiary login path — same handler shape as login(), just
-  /// dispatches to the same service method with the opposite account-type
-  /// expectation. No password/session logic duplicated here. [surface], if
+  /// Legacy beneficiary-only login, kept so app builds released before the
+  /// single login keep working. New clients use login(). [surface], if
   /// supplied, lets the service reject a beneficiary attempting this from
-  /// anywhere but the mobile app — see login()'s doc comment.
+  /// anywhere but the mobile app — see PatientAuthService.login.
   Future<Response> beneficiaryLogin(Request request) async {
     final body = await parseJsonBody(request);
 
