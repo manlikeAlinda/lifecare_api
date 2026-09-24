@@ -203,6 +203,8 @@ class PatientRepository {
     String? nationalId,
     String? phone,
     String? email,
+    bool clearPhone = false,
+    bool clearEmail = false,
   }) async {
     // Encrypt first: if email can't be stored, fail before anything else is
     // written, so a rejected save never leaves a partial update behind.
@@ -229,6 +231,21 @@ class PatientRepository {
       await _pool.execute(
         "UPDATE patients SET email_enc = :emailEnc WHERE ${uuidWhere('patient_id', 'id')}",
         {'id': id, 'emailEnc': emailEnc},
+      );
+    }
+    // Phone and email are optional on a beneficiary: an explicitly blanked
+    // field clears the stored value rather than being ignored.
+    if (clearPhone) {
+      await _pool.execute(
+        'UPDATE patients SET phone_e164 = NULL, phone_enc = NULL '
+        "WHERE ${uuidWhere('patient_id', 'id')}",
+        {'id': id},
+      );
+    }
+    if (clearEmail) {
+      await _pool.execute(
+        "UPDATE patients SET email_enc = NULL WHERE ${uuidWhere('patient_id', 'id')}",
+        {'id': id},
       );
     }
     return findById(id);

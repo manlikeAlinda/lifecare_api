@@ -484,6 +484,8 @@ class PatientService {
       nationalId: trimmed('national_id'),
       phone: trimmed('phone'),
       email: trimmed('email'),
+      clearPhone: data['clear_phone'] == true,
+      clearEmail: data['clear_email'] == true,
     );
     if (updated == null) throw ApiError.notFound('Beneficiary not found');
     return updated;

@@ -189,12 +189,16 @@ class PatientHandler {
       ..email('email', optional: true)
       ..throwIfInvalid();
 
+    bool blanked(String field) =>
+        raw[field] is String && (raw[field] as String).trim().isEmpty;
     final beneficiary = await _service.updateOwnBeneficiary(patient.id, beneficiaryId, {
       'full_name': body['name'],
       'relationship': body['relationship'],
       'national_id': body['nationalId'],
       'phone': body['phone'],
       'email': body['email'],
+      'clear_phone': blanked('phone'),
+      'clear_email': blanked('email'),
     });
     return okResponse(_toBeneficiaryJson(beneficiary));
   }
