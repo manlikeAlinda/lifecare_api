@@ -37,6 +37,7 @@ class PatientHandler {
     Validator(body)
       ..required('full_name')
       ..phoneE164('phone_e164')
+      ..oneOf('id_type', const ['national_id', 'passport', 'refugee_id', 'other', 'tin'])
       ..throwIfInvalid();
 
     final patient =
@@ -55,6 +56,7 @@ class PatientHandler {
 
     Validator(body)
       ..phoneE164('phone_e164')
+      ..oneOf('id_type', const ['national_id', 'passport', 'refugee_id', 'other', 'tin'])
       ..throwIfInvalid();
 
     final patient = await _service.updatePatient(id, body, caller.id);

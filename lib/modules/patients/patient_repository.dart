@@ -37,11 +37,33 @@ class PatientRepository {
 
   static const _selectFields =
       'SELECT $_uuidId, patient_code, full_name, phone_e164, national_id, '
+      'nat_id_enc, '
       'is_active, created_at, account_type, relationship, is_minor, '
       'login_access_status, id_type, allocated_budget_shillings, '
       '$_primaryAccountUuid AS primary_account_id, '
       '$_costCentreUuid AS cost_centre_id '
       'FROM patients';
+
+  /// TIN (`id_type == 'tin'`) is encrypted-only — see create()/update() —
+  /// so unlike every other id_type, its value has to be decrypted back out
+  /// of nat_id_enc into national_id for display. Applied after every
+  /// [_selectFields] read since nat_id_enc is now in that query; always
+  /// strips nat_id_enc from the returned map afterwards regardless of
+  /// id_type, so ciphertext never reaches a response.
+  Future<Map<String, dynamic>> _withDecryptedTin(
+    Map<String, dynamic> row,
+  ) async {
+    if (row['id_type'] == 'tin') {
+      row['national_id'] = await _pii.tryDecrypt(row['nat_id_enc'] as String?);
+    }
+    row.remove('nat_id_enc');
+    return row;
+  }
+
+  Future<List<Map<String, dynamic>>> _withDecryptedTinList(
+    List<Map<String, dynamic>> rows,
+  ) =>
+      Future.wait(rows.map(_withDecryptedTin));
 
   /// Fetches + decrypts email_enc (the only storage for email — there is no
   /// plaintext column, unlike phone/national_id) in a separate query rather
@@ -102,7 +124,7 @@ class PatientRepository {
       selectParams,
     );
 
-    return (result.rows.map(_rowToMap).toList(), total);
+    return (await _withDecryptedTinList(result.rows.map(_rowToMap).toList()), total);
   }
 
   Future<Map<String, dynamic>?> findById(String id) async {
@@ -112,7 +134,9 @@ class PatientRepository {
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
-    return _withDecryptedEmail(_rowToMap(result.rows.first));
+    return _withDecryptedEmail(
+      await _withDecryptedTin(_rowToMap(result.rows.first)),
+    );
   }
 
   Future<Map<String, dynamic>?> findByPatientCode(String code) async {
@@ -121,7 +145,7 @@ class PatientRepository {
       {'code': code},
     );
     if (result.rows.isEmpty) return null;
-    return _rowToMap(result.rows.first);
+    return _withDecryptedTin(_rowToMap(result.rows.first));
   }
 
   // ── Sub-patients (beneficiaries of a primary account) ─────────────────────
@@ -135,7 +159,7 @@ class PatientRepository {
       'ORDER BY full_name',
       {'id': primaryAccountId},
     );
-    return result.rows.map(_rowToMap).toList();
+    return _withDecryptedTinList(result.rows.map(_rowToMap).toList());
   }
 
   // ── Create ─────────────────────────────────────────────────────────────────
@@ -186,6 +210,20 @@ class PatientRepository {
     final nationalIdEnc =
         nationalId != null ? await _pii.encrypt(nationalId) : null;
 
+    // TIN is encrypted-only, unlike national_id's plaintext+encrypted dual
+    // write above — nat_id_enc is never decrypted on any other id_type's
+    // read path today (see _selectFields), so a plaintext TIN column value
+    // would be a permanent, pointless exposure. If encryption isn't
+    // configured, fail loudly instead of silently discarding the TIN the
+    // way the plaintext fallback would otherwise mask.
+    final isTin = idType == 'tin';
+    if (isTin && nationalId != null && nationalIdEnc == null) {
+      throw ApiError.validationError(
+        'TIN cannot be saved: PII encryption is not configured on this server.',
+      );
+    }
+    final nationalIdToStore = isTin ? null : nationalId;
+
     // Patient + wallet are atomic; audit is best-effort outside the transaction.
     try {
       await _pool.transactional((conn) async {
@@ -199,7 +237,7 @@ class PatientRepository {
           fullName: fullName,
           phone: phone,
           phoneEnc: phoneEnc,
-          nationalId: nationalId,
+          nationalId: nationalIdToStore,
           nationalIdEnc: nationalIdEnc,
           accountType: accountType,
           primaryAccountId: primaryAccountId,
@@ -207,6 +245,26 @@ class PatientRepository {
           isMinor: isMinor,
           idType: idType,
         );
+
+        // A beneficiary is being created — record the relationship in
+        // beneficiary_account_links (the source of truth for roster
+        // membership going forward), alongside the denormalized
+        // primary_account_id already set on the row above.
+        if (primaryAccountId != null) {
+          await conn.execute(
+            'INSERT INTO beneficiary_account_links '
+            '(link_id, beneficiary_patient_id, primary_account_id, relationship, linked_by) '
+            "VALUES (${uuidParam('linkId')}, ${uuidParam('id')}, "
+            "${uuidParam('primaryAccountId')}, :relationship, ${uuidParam('createdBy')})",
+            {
+              'linkId': generateUuid(),
+              'id': id,
+              'primaryAccountId': primaryAccountId,
+              'relationship': relationship,
+              'createdBy': createdBy,
+            },
+          );
+        }
 
         if (walletId != null) {
           await conn.execute(
@@ -377,6 +435,23 @@ class PatientRepository {
             relationship: p['relationship'] as String?,
             isMinor: p['isMinor'] as bool,
             idType: p['idType'] as String,
+          );
+
+          final costCentreId = p['costCentreId'] as String?;
+          await conn.execute(
+            'INSERT INTO beneficiary_account_links '
+            '(link_id, beneficiary_patient_id, primary_account_id, relationship, cost_centre_id, linked_by) '
+            "VALUES (${uuidParam('linkId')}, ${uuidParam('id')}, "
+            "${uuidParam('primaryAccountId')}, :relationship, "
+            "${costCentreId != null ? uuidParam('costCentreId') : 'NULL'}, ${uuidParam('createdBy')})",
+            {
+              'linkId': generateUuid(),
+              'id': p['id'] as String,
+              'primaryAccountId': primaryAccountId,
+              'relationship': p['relationship'] as String?,
+              if (costCentreId != null) 'costCentreId': costCentreId,
+              'createdBy': createdBy,
+            },
           );
         }
         await writeAudit(
@@ -712,7 +787,18 @@ class PatientRepository {
     }
     if (fields.containsKey('national_id')) {
       final enc = await _pii.encrypt(fields['national_id'] as String);
-      if (enc != null) {
+      // TIN is encrypted-only — no plaintext national_id column write, and
+      // encryption must actually succeed (see create()'s matching check).
+      if (fields['id_type'] == 'tin') {
+        if (enc == null) {
+          throw ApiError.validationError(
+            'TIN cannot be saved: PII encryption is not configured on this server.',
+          );
+        }
+        params['national_id'] = null;
+        setClauseParts.add('nat_id_enc = :nationalIdEnc');
+        params['nationalIdEnc'] = enc;
+      } else if (enc != null) {
         setClauseParts.add('nat_id_enc = :nationalIdEnc');
         params['nationalIdEnc'] = enc;
       }
@@ -933,17 +1019,42 @@ class PatientRepository {
     }
   }
 
-  /// Soft-deletes a sub-patient (beneficiary). Unlike [hardDelete], this
-  /// leaves encounters and wallet_ledger history intact — the shared wallet's
-  /// ledger entries reference wallet_id, not patient_id, so hard-deleting the
-  /// beneficiary's encounters would sever the audit trail for a wallet debit
-  /// that remains on the books.
-  Future<void> softDeleteSubPatient(String id) async {
-    await _pool.execute(
-      "UPDATE patients SET deleted_at = NOW(6) "
-      "WHERE patient_id = UNHEX(REPLACE(:id, '-', '')) AND deleted_at IS NULL",
-      {'id': id},
-    );
+  /// Removes a beneficiary from a primary account's roster. Unlike the old
+  /// softDeleteSubPatient (retired — used to set patients.deleted_at on the
+  /// beneficiary's own row), this never touches the beneficiary's clinical/
+  /// financial identity at all: encounters, encounter_services,
+  /// encounter_medications, and wallet_ledger all still reference
+  /// patient_id, untouched. Only the relationship — beneficiary_account_links
+  /// — is hard-deleted; no deleted_at/is_active flag is ever set on it or on
+  /// the beneficiary's patients row. patients.primary_account_id is cleared
+  /// as a denormalized cache update, not the removal itself.
+  Future<void> unlinkBeneficiary({
+    required String beneficiaryId,
+    required String primaryAccountId,
+    required String unlinkedBy,
+  }) async {
+    await _pool.transactional((conn) async {
+      await conn.execute(
+        'DELETE FROM beneficiary_account_links '
+        "WHERE ${uuidWhere('beneficiary_patient_id', 'beneficiaryId')} "
+        "AND ${uuidWhere('primary_account_id', 'primaryAccountId')}",
+        {'beneficiaryId': beneficiaryId, 'primaryAccountId': primaryAccountId},
+      );
+      await conn.execute(
+        'UPDATE patients SET primary_account_id = NULL '
+        "WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
+        {'beneficiaryId': beneficiaryId},
+      );
+      await writeAudit(
+        conn: conn,
+        actorId: unlinkedBy,
+        action: 'UNLINK_BENEFICIARY',
+        targetType: 'patient',
+        targetIdUuid: beneficiaryId,
+        before: {'primary_account_id': primaryAccountId},
+        after: {'primary_account_id': null},
+      );
+    });
   }
 
   // ── Beneficiary login access ────────────────────────────────────────────────

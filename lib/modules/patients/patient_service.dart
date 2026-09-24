@@ -3,6 +3,41 @@ import 'package:lifecare_api/core/patients/beneficiary_context.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 import 'patient_repository.dart';
 
+/// TIN eligibility + format check for a corporate patient record. Public,
+/// side-effect-free (no DB/PII dependency) so it's independently unit-
+/// testable — see test/modules/patients/tin_validation_test.dart.
+///
+/// TIN format is length-only (exactly 10 characters when present): URA's
+/// exact character-class rules (numeric-only? leading zeros allowed?)
+/// aren't confirmed, and a wrong regex risks rejecting valid TINs, which is
+/// worse than under-validating. Never coerce to a numeric type here.
+void validateTinSubmission({
+  required String? idType,
+  required String? nationalId,
+  required String effectiveAccountType,
+}) {
+  if (idType != 'tin') return;
+  if (effectiveAccountType != 'corporate') {
+    throw ApiError.validationError(
+      'id_type "tin" is only valid for corporate accounts',
+      details: [
+        {
+          'field': 'id_type',
+          'message': 'tin requires account_type to be "corporate"',
+        },
+      ],
+    );
+  }
+  if (nationalId != null && nationalId.trim().length != 10) {
+    throw ApiError.validationError(
+      'TIN must be exactly 10 characters',
+      details: [
+        {'field': 'national_id', 'message': 'TIN must be exactly 10 characters'},
+      ],
+    );
+  }
+}
+
 class PatientService {
   final PatientRepository _repo;
 
@@ -54,6 +89,14 @@ class PatientService {
         ? (data['opening_balance'] as num?)?.toDouble()
         : null;
 
+    final accountType = data['account_type'] as String? ?? 'individual';
+    final idType = data['id_type'] as String? ?? 'national_id';
+    validateTinSubmission(
+      idType: idType,
+      nationalId: data['national_id'] as String?,
+      effectiveAccountType: accountType,
+    );
+
     // patient_code is never accepted from the client — the repository
     // always assigns the next LC-XXX sequence value server-side.
     return _repo.create(
@@ -63,8 +106,8 @@ class PatientService {
       createdBy: createdBy,
       phone: data['phone'] as String? ?? data['phone_e164'] as String?,
       nationalId: data['national_id'] as String?,
-      accountType: data['account_type'] as String? ?? 'individual',
-      idType: data['id_type'] as String? ?? 'national_id',
+      accountType: accountType,
+      idType: idType,
       openingBalanceShillings:
           (openingBalance != null && openingBalance > 0) ? openingBalance : null,
     );
@@ -77,7 +120,31 @@ class PatientService {
   ) async {
     final patient = await _repo.findById(id);
     if (patient == null) throw ApiError.notFound('Patient not found');
-    final updated = await _repo.update(id, data, updatedBy);
+
+    final effectiveAccountType =
+        data['account_type'] as String? ?? patient['account_type'] as String;
+    final effectiveIdType =
+        data['id_type'] as String? ?? patient['id_type'] as String?;
+    final effectiveNationalId = data.containsKey('national_id')
+        ? data['national_id'] as String?
+        : patient['national_id'] as String?;
+    validateTinSubmission(
+      idType: effectiveIdType,
+      nationalId: effectiveNationalId,
+      effectiveAccountType: effectiveAccountType,
+    );
+
+    // _repo.update() only ever sees the raw partial payload, not the
+    // existing row — if national_id is being changed on a record whose
+    // effective id_type is 'tin' (inherited from the existing row, not
+    // resent in this request), the repository still needs to know to
+    // route it through the encrypted-only write path rather than plain
+    // national_id.
+    final updateData = (effectiveIdType == 'tin' && !data.containsKey('id_type'))
+        ? {...data, 'id_type': 'tin'}
+        : data;
+
+    final updated = await _repo.update(id, updateData, updatedBy);
     return updated!;
   }
 
@@ -176,7 +243,15 @@ class PatientService {
   Future<void> deleteSubPatient(String subPatientId, String deletedBy) async {
     final patient = await _repo.findById(subPatientId);
     if (patient == null) throw ApiError.notFound('Beneficiary not found');
-    await _repo.softDeleteSubPatient(subPatientId);
+    final primaryAccountId = patient['primary_account_id'] as String?;
+    if (primaryAccountId == null) {
+      throw ApiError.validationError('Not a beneficiary');
+    }
+    await _repo.unlinkBeneficiary(
+      beneficiaryId: subPatientId,
+      primaryAccountId: primaryAccountId,
+      unlinkedBy: deletedBy,
+    );
   }
 
   // ── Roster bulk import (Module 1 — corporate accounts) ──────────────────────
@@ -392,7 +467,11 @@ class PatientService {
       throw ApiError.forbidden();
     }
 
-    await _repo.softDeleteSubPatient(beneficiaryId);
+    await _repo.unlinkBeneficiary(
+      beneficiaryId: beneficiaryId,
+      primaryAccountId: requestingPatientId,
+      unlinkedBy: requestingPatientId,
+    );
   }
 
   // ── Corporate self-service roster CSV import ─────────────────────────────
