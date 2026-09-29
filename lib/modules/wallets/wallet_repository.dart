@@ -36,7 +36,10 @@ class WalletRepository {
       "SUBSTR(HEX(COALESCE(w.primary_patient_id, w.patient_id)),17,4),'-',"
       "SUBSTR(HEX(COALESCE(w.primary_patient_id, w.patient_id)),21))) AS patient_id, "
       'w.balance_shillings AS balance, w.status, w.created_at, '
-      'w.last_activity_at AS updated_at, p.account_type '
+      'w.last_activity_at AS updated_at, p.account_type, '
+      // Named so the desktop dashboard's debt / low-balance worklists can
+      // say whose wallet it is instead of "Unknown patient".
+      'p.full_name AS patient_name '
       'FROM wallets w '
       'LEFT JOIN patients p ON p.patient_id = COALESCE(w.primary_patient_id, w.patient_id)';
 

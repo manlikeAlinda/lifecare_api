@@ -56,6 +56,13 @@ class ClinicTime {
     return DateTime.utc(clinic.year, clinic.month, clinic.day);
   }
 
+  /// Parses a DATETIME value as read back from MySQL ('2026-08-13 21:00:00'
+  /// or with fractional seconds) as the UTC instant it's stored as.
+  /// `DateTime.parse` alone treats a zone-less string as the *server's*
+  /// local time, which silently shifts it on any non-UTC host.
+  static DateTime parseDbUtc(String raw) =>
+      DateTime.parse('${raw.replaceFirst(' ', 'T')}Z');
+
   /// MySQL DATETIME literal, e.g. '2026-08-13 21:00:00'.
   static String sql(DateTime utc) =>
       utc.toIso8601String().substring(0, 19).replaceFirst('T', ' ');

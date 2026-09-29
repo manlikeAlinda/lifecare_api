@@ -208,7 +208,7 @@ class AnalyticsRepository {
     for (final row in result.rows) {
       final raw = row.assoc()['visited_at'];
       if (raw == null) continue;
-      final visitedUtc = DateTime.parse(raw).toUtc();
+      final visitedUtc = ClinicTime.parseDbUtc(raw);
       final visitedClinicDate = ClinicTime.clinicDateOf(visitedUtc);
       final dayIndex = visitedClinicDate.difference(oldestClinicDate).inDays;
       if (dayIndex >= 0 && dayIndex < days) counts[dayIndex]++;
