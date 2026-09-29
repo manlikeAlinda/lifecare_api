@@ -1086,61 +1086,6 @@ class PatientRepository {
     });
   }
 
-  /// Removes a beneficiary from a primary account's roster by ending the
-  /// link (beneficiary_account_links.unlinked_at/unlinked_by — the row is
-  /// kept, so link history stays queryable). The beneficiary's own patients
-  /// row and everything referencing it — encounters, encounter_services,
-  /// encounter_medications, wallet_ledger — is untouched.
-  /// patients.primary_account_id is cleared as a denormalized cache update
-  /// (roster reads use it); the ended link row is the durable record.
-  Future<void> unlinkBeneficiary({
-    required String beneficiaryId,
-    required String primaryAccountId,
-    required String unlinkedBy,
-  }) async {
-    await _pool.transactional((conn) async {
-      await conn.execute(
-        'UPDATE beneficiary_account_links SET unlinked_at = NOW(6), '
-        "unlinked_by = ${uuidParam('unlinkedBy')} "
-        "WHERE ${uuidWhere('beneficiary_patient_id', 'beneficiaryId')} "
-        "AND ${uuidWhere('primary_account_id', 'primaryAccountId')} "
-        'AND unlinked_at IS NULL',
-        {
-          'beneficiaryId': beneficiaryId,
-          'primaryAccountId': primaryAccountId,
-          'unlinkedBy': unlinkedBy,
-        },
-      );
-      // Login access came from being on this account: without it a removed
-      // beneficiary (primary_account_id now NULL) would sign in looking
-      // like a primary account holder with no wallet. Credentials/sessions
-      // are access, not history — removing them also rejects any token
-      // already issued (the patient auth middleware requires a credential).
-      await conn.execute(
-        "UPDATE patients SET primary_account_id = NULL, login_access_status = 'no_login' "
-        "WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
-        {'beneficiaryId': beneficiaryId},
-      );
-      await conn.execute(
-        "DELETE FROM patient_sessions WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
-        {'beneficiaryId': beneficiaryId},
-      );
-      await conn.execute(
-        "DELETE FROM patient_credentials WHERE ${uuidWhere('patient_id', 'beneficiaryId')}",
-        {'beneficiaryId': beneficiaryId},
-      );
-      await writeAudit(
-        conn: conn,
-        actorId: unlinkedBy,
-        action: 'UNLINK_BENEFICIARY',
-        targetType: 'patient',
-        targetIdUuid: beneficiaryId,
-        before: {'primary_account_id': primaryAccountId},
-        after: {'primary_account_id': null},
-      );
-    });
-  }
-
   // ── Beneficiary login access ────────────────────────────────────────────────
 
   /// Sets the beneficiary's login-access journey state. Deliberately NOT

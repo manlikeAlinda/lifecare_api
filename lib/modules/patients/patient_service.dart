@@ -38,6 +38,28 @@ void validateTinSubmission({
   }
 }
 
+/// A beneficiary ('dependent') must always belong to a primary account —
+/// one without it is an orphan: invisible under any account in the UI, yet
+/// still counted as an active account on the dashboard. Public and
+/// side-effect-free like validateTinSubmission — see
+/// test/modules/patients/beneficiary_primary_validation_test.dart.
+void validateBeneficiaryHasPrimary({
+  required String? accountType,
+  required String? primaryAccountId,
+}) {
+  if (accountType == 'dependent' && primaryAccountId == null) {
+    throw ApiError.validationError(
+      'A beneficiary must belong to a primary account',
+      details: [
+        {
+          'field': 'account_type',
+          'message': 'Add beneficiaries through their primary account instead',
+        },
+      ],
+    );
+  }
+}
+
 class PatientService {
   final PatientRepository _repo;
 
@@ -91,6 +113,7 @@ class PatientService {
 
     final accountType = data['account_type'] as String? ?? 'individual';
     final idType = data['id_type'] as String? ?? 'national_id';
+    validateBeneficiaryHasPrimary(accountType: accountType, primaryAccountId: null);
     validateTinSubmission(
       idType: idType,
       nationalId: data['national_id'] as String?,
@@ -128,6 +151,10 @@ class PatientService {
     final effectiveNationalId = data.containsKey('national_id')
         ? data['national_id'] as String?
         : patient['national_id'] as String?;
+    validateBeneficiaryHasPrimary(
+      accountType: effectiveAccountType,
+      primaryAccountId: patient['primary_account_id'] as String?,
+    );
     validateTinSubmission(
       idType: effectiveIdType,
       nationalId: effectiveNationalId,
@@ -153,6 +180,16 @@ class PatientService {
     String updatedBy,
   ) async {
     if (updates.isEmpty) return;
+    // Validated up front so a rejected row can't leave earlier rows applied.
+    for (final u in updates) {
+      final id = u['id'] as String?;
+      if (id == null || u['account_type'] != 'dependent') continue;
+      final patient = await _repo.findById(id);
+      validateBeneficiaryHasPrimary(
+        accountType: 'dependent',
+        primaryAccountId: patient?['primary_account_id'] as String?,
+      );
+    }
     for (final u in updates) {
       final id = u['id'] as String?;
       if (id == null) continue;
@@ -253,11 +290,9 @@ class PatientService {
     if (primaryAccountId == null) {
       throw ApiError.validationError('Not a beneficiary');
     }
-    await _repo.unlinkBeneficiary(
-      beneficiaryId: subPatientId,
-      primaryAccountId: primaryAccountId,
-      unlinkedBy: deletedBy,
-    );
+    // Soft-delete rather than unlink: unlinking cleared primary_account_id
+    // and left an active beneficiary with no primary account (an orphan).
+    await _repo.softDelete(subPatientId, deletedBy: deletedBy);
   }
 
   // ── Roster bulk import (Module 1 — corporate accounts) ──────────────────────
@@ -513,11 +548,8 @@ class PatientService {
       throw ApiError.forbidden();
     }
 
-    await _repo.unlinkBeneficiary(
-      beneficiaryId: beneficiaryId,
-      primaryAccountId: requestingPatientId,
-      unlinkedBy: requestingPatientId,
-    );
+    // Soft-delete rather than unlink — see deleteSubPatient.
+    await _repo.softDelete(beneficiaryId, deletedBy: requestingPatientId);
   }
 
   // ── Corporate self-service roster CSV import ─────────────────────────────
