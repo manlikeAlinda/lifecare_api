@@ -77,9 +77,21 @@ class AnalyticsRepository {
         'WHERE visited_at >= :from AND visited_at <= :to',
         {'from': monthStart, 'to': now},
       ),
+      // Only transactions that still belong to something on the dashboard.
+      // wallet_ledger rows are never deleted (financial history), so without
+      // these filters deleting an account or a visit could never bring the
+      // count down — deleting a visit even raised it, by adding a reversal.
+      //   • soft-deleted accounts' wallets are excluded, as on every other card;
+      //   • a deleted visit (encounters rows are hard-deleted) takes its
+      //     charge and compensating reversal with it.
       _count(
-        'SELECT COUNT(*) as val FROM wallet_ledger '
-        'WHERE created_at >= :from AND created_at <= :to',
+        'SELECT COUNT(*) as val FROM wallet_ledger l '
+        'JOIN wallets w ON w.wallet_id = l.wallet_id '
+        'JOIN patients p ON p.patient_id = COALESCE(w.primary_patient_id, w.patient_id) '
+        'WHERE l.created_at >= :from AND l.created_at <= :to '
+        'AND p.deleted_at IS NULL '
+        'AND (l.encounter_id IS NULL OR EXISTS '
+        '  (SELECT 1 FROM encounters e WHERE e.encounter_id = l.encounter_id))',
         {'from': monthStart, 'to': now},
       ),
       // Net revenue = deductions minus reversals in the period. A deleted or
