@@ -42,11 +42,24 @@ class AccountStatementService {
     return _creditTypes.contains(type) ? amount : -amount;
   }
 
-  Future<Map<String, dynamic>> generate(String patientId) async {
+  /// [fromUtc]/[toUtc] (half-open) limit which entries are listed; the
+  /// running balance still starts at account inception, so `opening_balance`
+  /// is the balance carried forward into the range.
+  ///
+  /// A beneficiary has no wallet of their own: their statement is the
+  /// primary account's wallet, listing only visits recorded for them, with
+  /// the balance column still showing the shared wallet's balance.
+  Future<Map<String, dynamic>> generate(
+    String patientId, {
+    DateTime? fromUtc,
+    DateTime? toUtc,
+  }) async {
     final patient = await _patientRepo.findById(patientId);
     if (patient == null) throw ApiError.notFound('Patient not found');
 
-    final wallet = await _walletRepo.findByPatientId(patientId);
+    final primaryAccountId = patient['primary_account_id'] as String?;
+    final walletOwnerId = primaryAccountId ?? patientId;
+    final wallet = await _walletRepo.findByPatientId(walletOwnerId);
     if (wallet == null) {
       throw ApiError.notFound('Wallet not found for this patient');
     }
@@ -73,11 +86,23 @@ class AccountStatementService {
 
     final rows = <Map<String, dynamic>>[];
     double runningBalance = 0;
-    const openingBalance = 0.0;
+    double openingBalance = 0;
 
     for (final entry in ledger) {
+      final at = _entryTime(entry['created_at']);
+      if (toUtc != null && at != null && !at.isBefore(toUtc)) break;
       runningBalance += _delta(entry);
       final encId = entry['encounter_id'] as String?;
+
+      if (fromUtc != null && at != null && at.isBefore(fromUtc)) {
+        openingBalance = runningBalance;
+        continue;
+      }
+      if (primaryAccountId != null &&
+          (encId == null ||
+              encounterCache[encId]?['dependent_id'] != patientId)) {
+        continue;
+      }
 
       if (encId != null &&
           entry['type'] == 'deduction' &&
@@ -97,10 +122,20 @@ class AccountStatementService {
         'name': patient['full_name'],
         'code': patient['patient_code'],
       },
+      if (primaryAccountId != null) 'wallet_owner_id': primaryAccountId,
       'opening_balance': openingBalance,
       'closing_balance': runningBalance,
       'rows': rows,
     };
+  }
+
+  // Ledger created_at arrives either as a DateTime or as MySQL's
+  // 'YYYY-MM-DD HH:MM:SS[.ffffff]' UTC string, depending on the row mapper.
+  static DateTime? _entryTime(Object? raw) {
+    if (raw is DateTime) return raw.toUtc();
+    if (raw is! String || raw.isEmpty) return null;
+    final iso = raw.replaceFirst(' ', 'T');
+    return DateTime.tryParse(iso.endsWith('Z') ? iso : '${iso}Z');
   }
 
   List<Map<String, dynamic>> _itemizedEncounterRows(

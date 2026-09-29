@@ -34,6 +34,9 @@ import 'package:lifecare_api/modules/catalog/catalog_service.dart';
 import 'package:lifecare_api/modules/analytics/analytics_handler.dart';
 import 'package:lifecare_api/modules/analytics/analytics_repository.dart';
 import 'package:lifecare_api/modules/analytics/analytics_service.dart';
+import 'package:lifecare_api/modules/reports/reports_handler.dart';
+import 'package:lifecare_api/modules/reports/reports_repository.dart';
+import 'package:lifecare_api/modules/reports/reports_service.dart';
 import 'package:lifecare_api/modules/patient_auth/patient_auth_handler.dart';
 import 'package:lifecare_api/modules/patient_auth/patient_auth_repository.dart';
 import 'package:lifecare_api/modules/patient_auth/patient_auth_service.dart';
@@ -120,6 +123,9 @@ Handler buildApp() {
   final accountStatementHandler = AccountStatementHandler(accountStatementService);
   final catalogHandler = CatalogHandler(catalogService);
   final analyticsHandler = AnalyticsHandler(analyticsService);
+  final reportsHandler = ReportsHandler(
+    ReportsService(ReportsRepository(pool), accountStatementService),
+  );
   final patientAuthHandler = PatientAuthHandler(patientAuthService);
   final patientTotpHandler = PatientTotpHandler(patientTotpService);
   final patientCredHandler = PatientCredentialsHandler(patientCredService);
@@ -1063,6 +1069,27 @@ Handler buildApp() {
         .addMiddleware(rateLimitMiddleware(reportLimiter))
         .addHandler(analyticsHandler.generateReport),
   );
+
+  // ── Reports module — see ReportsHandler for the general (admin) vs
+  // individual (any staff, ?patient_id=) access split. ─────────────────────
+  final reportsStaff = patientAuth.addMiddleware(rateLimitMiddleware(analyticsLimiter));
+  final reportsAdmin = adminOnly.addMiddleware(rateLimitMiddleware(analyticsLimiter));
+  router.get('/v1/reports/debtors', reportsAdmin.addHandler(reportsHandler.debtors));
+  router.get('/v1/reports/deposits', reportsStaff.addHandler(reportsHandler.deposits));
+  router.get('/v1/reports/new-accounts', reportsAdmin.addHandler(reportsHandler.newAccounts));
+  router.get(
+    '/v1/reports/inactive-accounts',
+    reportsAdmin.addHandler(reportsHandler.inactiveAccounts),
+  );
+  // Matrix row: "Generate full account invoice/statement" — admin only.
+  router.get(
+    '/v1/reports/account/<id>',
+    reportsAdmin.addHandler(
+      (Request req) => reportsHandler.account(req, req.params['id']!),
+    ),
+  );
+  router.get('/v1/reports/drugs', reportsStaff.addHandler(reportsHandler.drugs));
+  router.get('/v1/reports/services', reportsStaff.addHandler(reportsHandler.services));
 
   // ── Global pipeline ───────────────────────────────────────────────────────────
   return Pipeline()
