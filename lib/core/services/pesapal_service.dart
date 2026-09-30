@@ -155,9 +155,12 @@ class PesapalService {
 
   // ── Transaction status ────────────────────────────────────────────────────────
 
-  /// Returns 'COMPLETED', 'FAILED', or 'PENDING'.
-  /// Pesapal status_code: 0=INVALID, 1=COMPLETED, 2=FAILED, 3=REVERSED.
-  Future<String> getTransactionStatus(String orderTrackingId) async {
+  /// [status] is 'COMPLETED', 'FAILED', or 'PENDING' (Pesapal status_code:
+  /// 0=INVALID, 1=COMPLETED, 2=FAILED, 3=REVERSED). [paymentMethod] is how
+  /// the payer paid, mapped to the report codes by [mapPesapalPaymentMethod]
+  /// (null if Pesapal didn't say or it's a method we don't recognise).
+  Future<({String status, String? paymentMethod})> getTransactionStatus(
+      String orderTrackingId) async {
     final token = await _getToken();
 
     final response = await http.get(
@@ -176,15 +179,32 @@ class PesapalService {
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final statusCode = (data['status_code'] as num?)?.toInt() ?? 0;
-
-    switch (statusCode) {
-      case 1:
-        return 'COMPLETED';
-      case 2:
-      case 3:
-        return 'FAILED';
-      default:
-        return 'PENDING';
-    }
+    final status = switch (statusCode) {
+      1 => 'COMPLETED',
+      2 || 3 => 'FAILED',
+      _ => 'PENDING',
+    };
+    return (
+      status: status,
+      paymentMethod: mapPesapalPaymentMethod(data['payment_method'] as String?),
+    );
   }
+}
+
+/// Maps Pesapal's free-text payment_method ("Visa", "MTNUG", "MpesaKE",
+/// "Bank Transfer", …) to wallet_ledger.payment_method codes. Unknown values
+/// return null (reported as "Not recorded") rather than a guess.
+String? mapPesapalPaymentMethod(String? raw) {
+  final m = (raw ?? '').toLowerCase();
+  if (m.isEmpty) return null;
+  if (m.contains('visa') || m.contains('master') || m.contains('card') ||
+      m.contains('amex') || m.contains('american express')) {
+    return 'card';
+  }
+  if (m.contains('mtn') || m.contains('airtel') || m.contains('mpesa') ||
+      m.contains('m-pesa') || m.contains('mobile')) {
+    return 'mobile_money';
+  }
+  if (m.contains('bank')) return 'bank';
+  return null;
 }

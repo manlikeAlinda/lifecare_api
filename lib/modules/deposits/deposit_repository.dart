@@ -114,6 +114,7 @@ class DepositRepository {
     required String walletId,
     required String patientId,
     required double amountShillings,
+    String? paymentMethod,
   }) async {
     bool credited = false;
     await _pool.transactional((conn) async {
@@ -128,12 +129,20 @@ class DepositRepository {
       final amountInt = amountShillings.round();
 
       await conn.execute(
-        'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, amount_shillings) '
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, '
+        'amount_shillings, payment_method) '
         "VALUES (UNHEX(REPLACE(:entryId, '-', '')), "
         "UNHEX(REPLACE(:walletId, '-', '')), "
         "UNHEX(REPLACE(:patientId, '-', '')), "
-        "'deposit', :amount)",
-        {'entryId': entryId, 'walletId': walletId, 'patientId': patientId, 'amount': amountInt},
+        "'deposit', :amount, :method)",
+        {
+          'entryId': entryId,
+          'walletId': walletId,
+          'patientId': patientId,
+          'amount': amountInt,
+          // How the payer paid, as Pesapal reported it (migration 046).
+          'method': paymentMethod,
+        },
       );
 
       await conn.execute(

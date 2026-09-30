@@ -91,10 +91,10 @@ class DepositService {
       final trackingId = deposit['provider_ref'] as String?;
       if (trackingId != null) {
         try {
-          final status = await _pesapal.getTransactionStatus(trackingId);
-          if (status == 'COMPLETED') {
-            await _creditWallet(deposit);
-          } else if (status == 'FAILED') {
+          final result = await _pesapal.getTransactionStatus(trackingId);
+          if (result.status == 'COMPLETED') {
+            await _creditWallet(deposit, paymentMethod: result.paymentMethod);
+          } else if (result.status == 'FAILED') {
             await _depositRepo.markFailed(depositId, 'Payment declined by provider');
           }
           return (await _depositRepo.findById(depositId))!;
@@ -142,10 +142,10 @@ class DepositService {
     await _depositRepo.saveMetadata(merchantRef, jsonEncode(payload));
 
     try {
-      final status = await _pesapal.getTransactionStatus(trackingId);
-      if (status == 'COMPLETED') {
-        await _creditWallet(deposit);
-      } else if (status == 'FAILED') {
+      final result = await _pesapal.getTransactionStatus(trackingId);
+      if (result.status == 'COMPLETED') {
+        await _creditWallet(deposit, paymentMethod: result.paymentMethod);
+      } else if (result.status == 'FAILED') {
         await _depositRepo.markFailed(merchantRef, 'Payment declined');
       }
     } catch (e) {
@@ -155,7 +155,10 @@ class DepositService {
 
   // ── Private helpers ───────────────────────────────────────────────────────────
 
-  Future<void> _creditWallet(Map<String, dynamic> deposit) async {
+  Future<void> _creditWallet(
+    Map<String, dynamic> deposit, {
+    String? paymentMethod,
+  }) async {
     final depositId = deposit['id'] as String;
     final walletId = deposit['wallet_id'] as String;
     final patientId = deposit['patient_id'] as String;
@@ -169,6 +172,7 @@ class DepositService {
       walletId: walletId,
       patientId: patientId,
       amountShillings: amountShillings,
+      paymentMethod: paymentMethod,
     );
 
     if (!credited) {
