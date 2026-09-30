@@ -271,6 +271,11 @@ class EncounterService {
     final wallet =
         await _walletRepo.findByPatientId(encounter['patient_id'] as String);
 
-    return _repo.delete(id, deletedBy, walletId: wallet?['id'] as String?);
+    return _repo.delete(
+      id,
+      deletedBy,
+      walletId: wallet?['id'] as String?,
+      snapshot: encounter,
+    );
   }
 }

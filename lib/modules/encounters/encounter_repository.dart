@@ -1,7 +1,29 @@
+import 'dart:convert';
 import 'package:mysql_client/mysql_client.dart';
 import 'package:lifecare_api/core/audit/audit_writer.dart';
 import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
+
+/// What a deleted visit was, in human terms, for the DELETE_ENCOUNTER audit
+/// entry. The full visit is archived separately in deleted_encounters.
+Map<String, dynamic> deletedVisitSummary(Map<String, dynamic> visit) {
+  List<String> lines(Object? items) => [
+        for (final l in (items as List? ?? const []).cast<Map<String, dynamic>>())
+          '${l['name']} x${l['quantity']}',
+      ];
+  return {
+    'reference_number': visit['reference_number'],
+    'patient_id': visit['patient_id'],
+    'patient_name': visit['patient_name'],
+    if (visit['dependent_id'] != null) 'dependent_id': visit['dependent_id'],
+    if (visit['dependent_name'] != null) 'dependent_name': visit['dependent_name'],
+    'visited_at': visit['visited_at']?.toString(),
+    'total_cost': visit['total_cost'],
+    'diagnosis_category': visit['diagnosis_category'],
+    'services': lines(visit['services']),
+    'medications': lines(visit['medications']),
+  };
+}
 
 class EncounterRepository {
   final MySQLConnectionPool _pool;
@@ -567,14 +589,22 @@ class EncounterRepository {
 
   // ── Delete ────────────────────────────────────────────────────────────────
 
-  /// Hard-deletes the encounter. Runs inside a transaction:
-  /// reverses the wallet ledger deduction, restores the balance,
-  /// deletes child rows (via CASCADE), then writes an audit entry.
+  /// Deletes the encounter. Runs inside a transaction:
+  /// archives [snapshot] (the full visit from [findById], with its service
+  /// and drug lines) into deleted_encounters (migration 048), reverses the
+  /// wallet ledger deduction, restores the balance, deletes the live rows
+  /// (child rows via CASCADE), then writes an audit entry describing what
+  /// was deleted.
   /// [walletId] must be resolved by the caller via
   /// WalletRepository.findByPatientId — see EncounterService.deleteEncounter.
   /// A raw join on encounters.patient_id silently misses beneficiaries, whose
   /// wallet is keyed to the primary account holder, not their own patient_id.
-  Future<bool> delete(String id, String deletedBy, {String? walletId}) async {
+  Future<bool> delete(
+    String id,
+    String deletedBy, {
+    String? walletId,
+    required Map<String, dynamic> snapshot,
+  }) async {
     // Fetch the encounter's total_cost before we delete anything.
     final encResult = await _pool.execute(
       "SELECT total_cost FROM encounters WHERE encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
@@ -586,6 +616,22 @@ class EncounterRepository {
     final totalCost = (_toDouble(encRow['total_cost'])).round();
 
     await _pool.transactional((conn) async {
+      // 0. Archive the full visit first — if this fails, nothing is deleted.
+      await conn.execute(
+        'INSERT INTO deleted_encounters '
+        '(encounter_id, patient_id, dependent_id, snapshot, deleted_by) VALUES '
+        "(${uuidParam('id')}, ${uuidParam('patientId')}, "
+        "${snapshot['dependent_id'] != null ? uuidParam('dependentId') : 'NULL'}, "
+        ":snapshot, ${uuidParam('deletedBy')})",
+        {
+          'id': id,
+          'patientId': snapshot['patient_id'],
+          if (snapshot['dependent_id'] != null) 'dependentId': snapshot['dependent_id'],
+          'snapshot': jsonEncode(snapshot, toEncodable: (v) => v.toString()),
+          'deletedBy': deletedBy,
+        },
+      );
+
       // 1. Reverse wallet ledger + balance if a wallet exists and cost > 0.
       if (walletId != null && totalCost > 0) {
         await conn.execute(
@@ -613,23 +659,15 @@ class EncounterRepository {
         {'id': id},
       );
 
-      // 3. Audit log.
-      await conn.execute(
-        'INSERT INTO audit_log '
-        '(audit_id, user_id, actor_user_id, action_type, entity_type, request_id, action, target_type, target_id, details) '
-        "VALUES (UNHEX(REPLACE(:auditId, '-', '')), "
-        "UNHEX(REPLACE(:actorId, '-', '')), "
-        "UNHEX(REPLACE(:actorId, '-', '')), "
-        ':action, :targetType, \'\', '
-        ':action, :targetType, '
-        "UNHEX(REPLACE(:targetId, '-', '')), '{}')",
-        {
-          'auditId': generateUuid(),
-          'actorId': deletedBy,
-          'action': 'DELETE_ENCOUNTER',
-          'targetType': 'encounter',
-          'targetId': id,
-        },
+      // 3. Audit log — says what was deleted (the empty '{}' it used to
+      // write left no trace of the visit's contents).
+      await writeAudit(
+        conn: conn,
+        actorId: deletedBy,
+        action: 'DELETE_ENCOUNTER',
+        targetType: 'encounter',
+        targetIdUuid: id,
+        before: deletedVisitSummary(snapshot),
       );
     });
 
