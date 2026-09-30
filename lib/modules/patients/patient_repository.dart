@@ -1067,7 +1067,9 @@ class PatientRepository {
 
       for (final pid in [id, ...subIds]) {
         await conn.execute(
-          'UPDATE patients SET deleted_at = NOW(6), '
+          // is_active = 0 too, so a deleted account never reads as active
+          // anywhere that checks is_active alone (M5).
+          'UPDATE patients SET deleted_at = NOW(6), is_active = 0, '
           "deleted_by = ${uuidParam('deletedBy')} "
           "WHERE ${uuidWhere('patient_id', 'pid')} AND deleted_at IS NULL",
           {'pid': pid, 'deletedBy': deletedBy},
