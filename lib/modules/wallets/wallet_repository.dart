@@ -214,6 +214,11 @@ class WalletRepository {
     String? reason,
   }) async {
     final amountInt = amount.round();
+    // NEGATIVE-BALANCE RULE — only visits may create debt (see
+    // EncounterRepository.create); debits here are zero-floored below. The
+    // one exception is a decrease 'adjustment', which is admin-only and
+    // limited to corporate/remittance accounts, which may go negative.
+    //
     // Signed delta: positive types add, negative types subtract.
     // 'opening_balance' is written directly by PatientRepository.create()
     // when onboarding a pre-existing client with a non-zero starting

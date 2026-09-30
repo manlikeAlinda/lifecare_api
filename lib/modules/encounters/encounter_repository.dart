@@ -395,7 +395,11 @@ class EncounterRepository {
         },
       );
 
-      // 5. Update wallet balance (denormalised).
+      // 5. Update wallet balance (denormalised). No zero floor, on purpose:
+      // NEGATIVE-BALANCE RULE — a visit may put a wallet into debt (the
+      // patient is treated; the debt shows in Debtors / Outstanding and is
+      // cleared by a desk payment). Every other debit refuses to go below
+      // zero — see WalletRepository.appendLedgerEntry.
       await conn.execute(
         'UPDATE wallets '
         'SET balance_shillings = balance_shillings - :amount, '
