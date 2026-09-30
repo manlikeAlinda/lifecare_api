@@ -326,6 +326,76 @@ class WalletRepository {
     return _rowToMap(result.rows.first);
   }
 
+  /// A payment taken at the desk: one 'deposit' ledger row (with method,
+  /// reference and the cashier as initiated_by), the balance credit and the
+  /// audit entry, in one transaction. The wallet row is locked first so a
+  /// concurrent close/delete can't slip between the check and the credit.
+  /// Returns the new ledger id and the balance after the payment.
+  Future<Map<String, dynamic>> recordCounterPayment({
+    required String walletId,
+    required int amount,
+    required String method,
+    String? reference,
+    String? notes,
+    required String cashierId,
+  }) async {
+    final entryId = generateUuid();
+    late int newBalance;
+    await _pool.transactional((conn) async {
+      final locked = await conn.execute(
+        'SELECT status, balance_shillings FROM wallets '
+        "WHERE ${uuidWhere('wallet_id', 'walletId')} FOR UPDATE",
+        {'walletId': walletId},
+      );
+      if (locked.rows.isEmpty) throw ApiError.notFound('Wallet not found');
+      final row = locked.rows.first.assoc();
+      if (row['status'] == 'CLOSED') {
+        throw ApiError.businessRule(
+          "This account's wallet is closed — payments can't be recorded against it",
+        );
+      }
+
+      await conn.execute(
+        'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, '
+        'amount_shillings, reason, payment_method, payment_reference) '
+        "VALUES (${uuidParam('entryId')}, ${uuidParam('walletId')}, "
+        "${uuidParam('cashierId')}, 'deposit', :amount, :notes, :method, :reference)",
+        {
+          'entryId': entryId,
+          'walletId': walletId,
+          'cashierId': cashierId,
+          'amount': amount,
+          'notes': notes,
+          'method': method,
+          'reference': reference,
+        },
+      );
+      await conn.execute(
+        'UPDATE wallets SET balance_shillings = balance_shillings + :amount, '
+        'last_activity_at = NOW() '
+        "WHERE ${uuidWhere('wallet_id', 'walletId')}",
+        {'amount': amount, 'walletId': walletId},
+      );
+      newBalance = int.parse(row['balance_shillings'] ?? '0') + amount;
+
+      await writeAudit(
+        conn: conn,
+        actorId: cashierId,
+        action: 'COUNTER_PAYMENT',
+        targetType: 'wallet',
+        targetIdUuid: walletId,
+        after: {
+          'ledger_id': entryId,
+          'amount': amount,
+          'payment_method': method,
+          if (reference != null) 'payment_reference': reference,
+          if (notes != null) 'notes': notes,
+        },
+      );
+    });
+    return {'ledger_id': entryId, 'balance_shillings': newBalance};
+  }
+
   Future<List<Map<String, dynamic>>> findDependentsByWalletId(
     String walletId,
   ) async {

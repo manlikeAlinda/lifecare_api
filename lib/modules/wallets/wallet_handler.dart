@@ -51,6 +51,17 @@ class WalletHandler {
     return okListResponse(entries, total: total, limit: limit, offset: offset);
   }
 
+  /// POST /v1/wallets/:id/payments — admin or staff records a desk payment.
+  Future<Response> recordPayment(Request request, String id) async {
+    final cashier = requireAuthUser(request);
+    Validator({'id': id})
+      ..uuid('id')
+      ..throwIfInvalid();
+    final body = await parseJsonBody(request);
+    final result = await _service.recordCounterPayment(id, body, cashier.id);
+    return createdResponse(result);
+  }
+
   Future<Response> getDependents(Request request, String id) async {
     final dependents = await _service.getWalletDependents(id);
     return okListResponse(dependents, total: dependents.length, limit: dependents.length, offset: 0);

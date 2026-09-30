@@ -122,6 +122,7 @@ class ReportsService {
             'amount_shillings': _num(r['amount_shillings']).toInt(),
             'method': r['method'],
             'processed_by': r['processed_by'],
+            'payment_reference': r['payment_reference'],
             'created_at': _iso(_time(r['created_at'])),
           },
       ],

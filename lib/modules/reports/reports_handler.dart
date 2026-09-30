@@ -69,10 +69,9 @@ class ReportsHandler {
     final method = queryParam(r, 'method');
     if (method != null) {
       Validator({'method': method})
-        // 'bank' is accepted but matches nothing yet: deposits don't record
-        // how they were paid, so every deposit classifies as counter or
-        // mobile_money (see ReportsRepository._depositMethodSql).
-        ..oneOf('method', ['counter', 'mobile_money', 'bank'])
+        // Stored payment methods, plus 'not_recorded' for deposits made
+        // before methods were captured (see ReportsRepository._depositMethodSql).
+        ..oneOf('method', ['cash', 'mobile_money', 'card', 'bank', 'not_recorded'])
         ..throwIfInvalid();
     }
     return okResponse(await _service.deposits(

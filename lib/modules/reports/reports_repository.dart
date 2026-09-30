@@ -62,11 +62,10 @@ class ReportsRepository {
 
   // ── Deposits ───────────────────────────────────────────────────────────────
 
-  // Counter deposits are recorded by a staff user (initiated_by → users);
-  // self-service mobile-money deposits are initiated by the patient
-  // themselves (DepositRepository.creditDepositTransaction).
-  static const _depositMethodSql =
-      "CASE WHEN u.user_id IS NOT NULL THEN 'counter' ELSE 'mobile_money' END";
+  // How the deposit was paid (wallet_ledger.payment_method, migration 046).
+  // Rows written before that migration have no method and are reported as
+  // 'not_recorded' rather than guessed.
+  static const _depositMethodSql = "COALESCE(l.payment_method, 'not_recorded')";
 
   String _depositsFrom({
     required bool personScoped,
@@ -111,7 +110,7 @@ class ReportsRepository {
       _query(
         'SELECT ${uuidSelect('l.ledger_id', 'transaction_id')}, '
         'p.patient_code, p.full_name, l.amount_shillings, l.created_at, '
-        '$_depositMethodSql AS method, '
+        '$_depositMethodSql AS method, l.payment_reference, '
         'COALESCE(u.display_name, ip.full_name) AS processed_by '
         '${_depositsFrom(personScoped: personId != null, hasMethod: method != null)}'
         'ORDER BY l.created_at DESC, l.ledger_id '

@@ -451,6 +451,13 @@ Handler buildApp() {
       (Request req) => walletHandler.createTransaction(req, req.params['id']!),
     ),
   );
+  // Desk payments — admin or staff (any logged-in desk user).
+  router.post(
+    '/v1/wallets/<id>/payments',
+    patientAuth.addHandler(
+      (Request req) => walletHandler.recordPayment(req, req.params['id']!),
+    ),
+  );
 
   // ── Encounters ────────────────────────────────────────────────────────────────
   router.get('/v1/encounters', patientAuth.addHandler(encounterHandler.list));
