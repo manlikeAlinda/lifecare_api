@@ -60,6 +60,38 @@ void validateBeneficiaryHasPrimary({
   }
 }
 
+/// Validated input for the beneficiary typeahead: at least 2 non-blank
+/// characters (shorter queries match too much of a large roster to be
+/// useful) and a result cap of 1–20, default 10. [likePattern] escapes
+/// `%`/`_` so a typed wildcard matches literally.
+({String query, int limit, String likePattern}) parseBeneficiarySearch(
+  String? rawQuery,
+  String? rawLimit,
+) {
+  final query = (rawQuery ?? '').trim();
+  if (query.length < 2) {
+    throw ApiError.validationError(
+      'Type at least 2 characters to search',
+      details: [
+        {'field': 'q', 'message': 'Minimum 2 characters'},
+      ],
+    );
+  }
+  var limit = 10;
+  if (rawLimit != null && rawLimit.isNotEmpty) {
+    final parsed = int.tryParse(rawLimit);
+    if (parsed == null) {
+      throw ApiError.validationError('limit must be a whole number');
+    }
+    limit = parsed.clamp(1, 20);
+  }
+  final escaped = query
+      .replaceAll(r'\', r'\\')
+      .replaceAll('%', r'\%')
+      .replaceAll('_', r'\_');
+  return (query: query, limit: limit, likePattern: '%$escaped%');
+}
+
 class PatientService {
   final PatientRepository _repo;
 
@@ -232,6 +264,23 @@ class PatientService {
   ) async {
     await _ensurePatientExists(primaryAccountId);
     return _repo.findSubPatients(primaryAccountId);
+  }
+
+  /// Typeahead for the visit form's "who is visiting" field — always
+  /// scoped to [primaryAccountId], so it can never return another
+  /// account's beneficiaries.
+  Future<List<Map<String, dynamic>>> searchSubPatients(
+    String primaryAccountId, {
+    String? query,
+    String? limit,
+  }) async {
+    final search = parseBeneficiarySearch(query, limit);
+    await _ensurePatientExists(primaryAccountId);
+    return _repo.searchSubPatients(
+      primaryAccountId,
+      likePattern: search.likePattern,
+      limit: search.limit,
+    );
   }
 
   Future<Map<String, dynamic>> createSubPatient(

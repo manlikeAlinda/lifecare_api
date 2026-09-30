@@ -171,6 +171,27 @@ class PatientRepository {
     return Future.wait(rows.map(_withDecryptedEmail));
   }
 
+  /// Beneficiary typeahead: active, non-deleted beneficiaries of one
+  /// account whose name, code or phone contains the (pre-escaped)
+  /// [likePattern]. Minimal payload — id plus the fields the picker
+  /// displays. primary_account_id narrows via idx_patients_primary_name
+  /// (migration 045) before the text match.
+  Future<List<Map<String, dynamic>>> searchSubPatients(
+    String primaryAccountId, {
+    required String likePattern,
+    required int limit,
+  }) async {
+    final result = await _pool.execute(
+      'SELECT $_uuidId, full_name, patient_code, relationship FROM patients '
+      "WHERE ${uuidWhere('primary_account_id', 'primaryId')} "
+      'AND deleted_at IS NULL AND is_active = 1 '
+      'AND (full_name LIKE :q OR patient_code LIKE :q OR phone_e164 LIKE :q) '
+      'ORDER BY full_name, patient_code LIMIT :limit',
+      {'primaryId': primaryAccountId, 'q': likePattern, 'limit': limit},
+    );
+    return result.rows.map((r) => Map<String, dynamic>.from(r.assoc())).toList();
+  }
+
   /// email has no plaintext column, so it can only be stored encrypted. Throws
   /// rather than silently skipping the write when encryption isn't
   /// configured — a save must never report success without persisting.

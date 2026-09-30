@@ -94,7 +94,7 @@ Handler buildApp() {
   final userService = UserService(userRepo);
   final patientService = PatientService(patientRepo);
   final walletService = WalletService(walletRepo);
-  final encounterService = EncounterService(encounterRepo, walletRepo, catalogRepo);
+  final encounterService = EncounterService(encounterRepo, walletRepo, patientRepo, catalogRepo);
   final accountStatementService =
       AccountStatementService(walletRepo, encounterRepo, patientRepo);
   final catalogService = CatalogService(catalogRepo);
@@ -385,6 +385,14 @@ Handler buildApp() {
   );
 
   // Dependents
+  // Same staff auth as the dependents list below; search is registered
+  // first so it can never be read as a /dependents/<depId> path.
+  router.get(
+    '/v1/patients/<id>/dependents/search',
+    patientAuth.addHandler(
+      (Request req) => patientHandler.searchDependents(req, req.params['id']!),
+    ),
+  );
   router.get(
     '/v1/patients/<id>/dependents',
     patientAuth.addHandler(

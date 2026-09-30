@@ -1,17 +1,61 @@
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 import 'package:lifecare_api/modules/catalog/catalog_repository.dart';
+import 'package:lifecare_api/modules/patients/patient_repository.dart';
 import 'package:lifecare_api/modules/wallets/wallet_repository.dart';
 import 'encounter_pricing_resolver.dart';
 import 'encounter_repository.dart';
 
+/// Server-side check of who a new visit is for — the UI's picker is never
+/// trusted for this. [account] is the paying account (patient_id);
+/// [beneficiary] is the looked-up row for [dependentId] (null if it doesn't
+/// exist or is soft-deleted).
+///
+/// - A named beneficiary must be an active beneficiary of [account] —
+///   never another account's, which would bill the wrong wallet's visit
+///   history to this company.
+/// - A corporate account must name one: the company itself can't visit.
+void validateVisitBeneficiary({
+  required Map<String, dynamic> account,
+  required String? dependentId,
+  required Map<String, dynamic>? beneficiary,
+}) {
+  if (dependentId == null) {
+    if (account['account_type'] == 'corporate') {
+      throw ApiError.validationError(
+        'Choose which beneficiary is visiting — corporate visits must name one',
+        details: [
+          {'field': 'dependent_id', 'message': 'Required for corporate accounts'},
+        ],
+      );
+    }
+    return;
+  }
+  final belongs = beneficiary != null &&
+      beneficiary['primary_account_id'] == account['id'] &&
+      beneficiary['is_active'] == true;
+  if (!belongs) {
+    throw ApiError.validationError(
+      'That beneficiary is not an active member of this account',
+      details: [
+        {'field': 'dependent_id', 'message': 'Not a beneficiary of patient_id'},
+      ],
+    );
+  }
+}
+
 class EncounterService {
   final EncounterRepository _repo;
   final WalletRepository _walletRepo;
+  final PatientRepository _patientRepo;
   final EncounterPricingResolver _pricing;
 
-  EncounterService(this._repo, this._walletRepo, CatalogPriceLookup catalogRepo)
-      : _pricing = EncounterPricingResolver(catalogRepo);
+  EncounterService(
+    this._repo,
+    this._walletRepo,
+    this._patientRepo,
+    CatalogPriceLookup catalogRepo,
+  ) : _pricing = EncounterPricingResolver(catalogRepo);
 
   Future<(List<Map<String, dynamic>>, int)> listEncounters({
     int limit = 20,
@@ -67,6 +111,15 @@ class EncounterService {
   ) async {
     final patientId = data['patient_id'] as String;
     final dependentId = data['dependent_id'] as String?;
+
+    final account = await _patientRepo.findById(patientId);
+    if (account == null) throw ApiError.notFound('Patient not found');
+    validateVisitBeneficiary(
+      account: account,
+      dependentId: dependentId,
+      beneficiary:
+          dependentId == null ? null : await _patientRepo.findById(dependentId),
+    );
 
     final wallet = await _walletRepo.findByPatientId(patientId);
     if (wallet == null) {

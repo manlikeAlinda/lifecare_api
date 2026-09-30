@@ -428,6 +428,20 @@ class PatientHandler {
 
   // ── Dependents ──────────────────────────────────────────────────────────────
 
+  /// GET /v1/patients/:id/dependents/search?q=&limit= — beneficiary typeahead
+  /// for the visit form, scoped to account :id. See parseBeneficiarySearch.
+  Future<Response> searchDependents(Request request, String patientId) async {
+    Validator({'id': patientId})
+      ..uuid('id')
+      ..throwIfInvalid();
+    final results = await _service.searchSubPatients(
+      patientId,
+      query: queryParam(request, 'q'),
+      limit: queryParam(request, 'limit'),
+    );
+    return okListResponse(results, total: results.length, limit: results.length);
+  }
+
   Future<Response> listDependents(Request request, String patientId) async {
     final dependents = await _service.listDependents(patientId);
     return okListResponse(dependents, total: dependents.length);
