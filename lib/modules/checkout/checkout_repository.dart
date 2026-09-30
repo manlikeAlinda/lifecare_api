@@ -53,8 +53,7 @@ class CheckoutRepository {
   ///
   /// Throws ApiError.businessRule if the wallet isn't ACTIVE or the balance
   /// can't cover the amount — matches the same throw-from-repo convention
-  /// established in WalletRepository.appendLedgerEntry and
-  /// DepositRepository.reverseDepositTransaction.
+  /// established in WalletRepository.appendLedgerEntry.
   Future<void> checkout({
     required String checkoutId,
     required String walletId,

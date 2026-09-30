@@ -675,12 +675,6 @@ Handler buildApp() {
       (Request req) => depositHandler.getStatus(req, req.params['id']!),
     ),
   );
-  router.post(
-    '/v1/patient/deposit/<id>/reverse',
-    Pipeline().addMiddleware(patientAuth2).addHandler(
-      (Request req) => depositHandler.reverse(req, req.params['id']!),
-    ),
-  );
 
   // ── Patient Checkout (wallet spend/debit) ──────────────────────────────────────
   router.post(
