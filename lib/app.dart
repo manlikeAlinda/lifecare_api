@@ -262,17 +262,19 @@ Handler buildApp() {
   );
 
   // ── Patients ─────────────────────────────────────────────────────────────────
-  final patientAuth = Pipeline().addMiddleware(auth);
+  // Any logged-in STAFF user (admin or staff) — was misleadingly named
+  // `patientAuth`. Patient-app sessions use `patientAuth2`.
+  final staffAuth = Pipeline().addMiddleware(auth);
 
-  router.get('/v1/patients', patientAuth.addHandler(patientHandler.list));
-  router.post('/v1/patients', patientAuth.addHandler(patientHandler.create));
+  router.get('/v1/patients', staffAuth.addHandler(patientHandler.list));
+  router.post('/v1/patients', staffAuth.addHandler(patientHandler.create));
   router.patch(
     '/v1/patients',
-    patientAuth.addHandler(patientHandler.bulkUpdate),
+    staffAuth.addHandler(patientHandler.bulkUpdate),
   );
   router.post(
     '/v1/patients/bulk-status',
-    patientAuth.addHandler(patientHandler.bulkUpdateStatus),
+    staffAuth.addHandler(patientHandler.bulkUpdateStatus),
   );
   router.post(
     '/v1/patients/bulk-delete',
@@ -280,13 +282,13 @@ Handler buildApp() {
   );
   router.get(
     '/v1/patients/<id>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => patientHandler.getById(req, req.params['id']!),
     ),
   );
   router.patch(
     '/v1/patients/<id>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => patientHandler.update(req, req.params['id']!),
     ),
   );
@@ -300,7 +302,7 @@ Handler buildApp() {
   // Patient sub-resources
   router.get(
     '/v1/patients/<id>/wallet',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) async {
         final wallet = await walletService.getWalletByPatient(req.params['id']!);
         return okResponse(wallet);
@@ -316,7 +318,7 @@ Handler buildApp() {
   );
   router.get(
     '/v1/patients/<id>/encounters',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) async {
         final id = req.params['id']!;
         final limit = parseLimit(req);
@@ -393,25 +395,25 @@ Handler buildApp() {
   // first so it can never be read as a /dependents/<depId> path.
   router.get(
     '/v1/patients/<id>/dependents/search',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => patientHandler.searchDependents(req, req.params['id']!),
     ),
   );
   router.get(
     '/v1/patients/<id>/dependents',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => patientHandler.listDependents(req, req.params['id']!),
     ),
   );
   router.post(
     '/v1/patients/<id>/dependents',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => patientHandler.createDependent(req, req.params['id']!),
     ),
   );
   router.patch(
     '/v1/patients/<patientId>/dependents/<depId>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) =>
           patientHandler.updateDependent(req, req.params['patientId']!, req.params['depId']!),
     ),
@@ -425,27 +427,27 @@ Handler buildApp() {
   );
 
   // ── Wallets ───────────────────────────────────────────────────────────────────
-  router.get('/v1/wallets', patientAuth.addHandler(walletHandler.list));
+  router.get('/v1/wallets', staffAuth.addHandler(walletHandler.list));
   // /ledger must be before /<id> to prevent the wildcard from catching it
   router.get(
     '/v1/wallets/ledger',
-    patientAuth.addHandler(walletHandler.getGlobalLedger),
+    staffAuth.addHandler(walletHandler.getGlobalLedger),
   );
   router.get(
     '/v1/wallets/<id>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => walletHandler.getById(req, req.params['id']!),
     ),
   );
   router.get(
     '/v1/wallets/<id>/ledger',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => walletHandler.getLedger(req, req.params['id']!),
     ),
   );
   router.get(
     '/v1/wallets/<id>/dependents',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => walletHandler.getDependents(req, req.params['id']!),
     ),
   );
@@ -458,28 +460,28 @@ Handler buildApp() {
   // Desk payments — admin or staff (any logged-in desk user).
   router.post(
     '/v1/wallets/<id>/payments',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => walletHandler.recordPayment(req, req.params['id']!),
     ),
   );
 
   // ── Encounters ────────────────────────────────────────────────────────────────
-  router.get('/v1/encounters', patientAuth.addHandler(encounterHandler.list));
-  router.post('/v1/encounters', patientAuth.addHandler(encounterHandler.create));
+  router.get('/v1/encounters', staffAuth.addHandler(encounterHandler.list));
+  router.post('/v1/encounters', staffAuth.addHandler(encounterHandler.create));
   // static sub-paths must be before /<id> wildcard
   router.get(
     '/v1/encounters/daily-counts',
-    patientAuth.addHandler(analyticsHandler.getDailyCounts),
+    staffAuth.addHandler(analyticsHandler.getDailyCounts),
   );
   router.get(
     '/v1/encounters/<id>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => encounterHandler.getById(req, req.params['id']!),
     ),
   );
   router.put(
     '/v1/encounters/<id>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => encounterHandler.update(req, req.params['id']!),
     ),
   );
@@ -491,7 +493,7 @@ Handler buildApp() {
   );
   router.patch(
     '/v1/encounters/<id>/status',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => encounterHandler.updateStatus(req, req.params['id']!),
     ),
   );
@@ -499,20 +501,20 @@ Handler buildApp() {
   // ── Catalog ───────────────────────────────────────────────────────────────────
   router.get(
     '/v1/catalog/services',
-    patientAuth.addHandler(catalogHandler.listServices),
+    staffAuth.addHandler(catalogHandler.listServices),
   );
   router.get(
     '/v1/catalog/drugs',
-    patientAuth.addHandler(catalogHandler.listDrugs),
+    staffAuth.addHandler(catalogHandler.listDrugs),
   );
   // count route must be before /<id> wildcard
   router.get(
     '/v1/catalog/drugs/count',
-    patientAuth.addHandler(catalogHandler.countDrugs),
+    staffAuth.addHandler(catalogHandler.countDrugs),
   );
   router.get(
     '/v1/drugs/count',
-    patientAuth.addHandler(catalogHandler.countDrugs),
+    staffAuth.addHandler(catalogHandler.countDrugs),
   );
   // Drug CRUD — registered before /<id> wildcard; write ops require admin
   router.post(
@@ -535,7 +537,7 @@ Handler buildApp() {
   // Slugs: dental, lab, procedures, imaging, laparoscopic, accommodation, consultation
   router.get(
     '/v1/catalog/services/<domain>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => catalogHandler.listByCategory(req, req.params['domain']!),
     ),
   );
@@ -559,7 +561,7 @@ Handler buildApp() {
   );
   router.get(
     '/v1/catalog/<id>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => catalogHandler.getById(req, req.params['id']!),
     ),
   );
@@ -596,11 +598,11 @@ Handler buildApp() {
   router.get('/v1/ads', adHandler.listPublic);
 
   // Alias routes — app uses these shorter paths
-  router.get('/v1/services', patientAuth.addHandler(catalogHandler.listServices));
-  router.get('/v1/drugs', patientAuth.addHandler(catalogHandler.listDrugs));
+  router.get('/v1/services', staffAuth.addHandler(catalogHandler.listServices));
+  router.get('/v1/drugs', staffAuth.addHandler(catalogHandler.listDrugs));
   router.get(
     '/v1/services/<category>',
-    patientAuth.addHandler(
+    staffAuth.addHandler(
       (Request req) => catalogHandler.listByCategory(req, req.params['category']!),
     ),
   );
@@ -1057,11 +1059,11 @@ Handler buildApp() {
   // ── Analytics ─────────────────────────────────────────────────────────────────
   router.get(
     '/v1/analytics/kpis',
-    patientAuth.addHandler(analyticsHandler.getKpis),
+    staffAuth.addHandler(analyticsHandler.getKpis),
   );
   router.get(
     '/v1/analytics/dashboard-kpis',
-    patientAuth.addHandler(analyticsHandler.getDashboardKpis),
+    staffAuth.addHandler(analyticsHandler.getDashboardKpis),
   );
   router.get(
     '/v1/analytics/beneficiary-login-stats',
@@ -1069,11 +1071,11 @@ Handler buildApp() {
   );
   router.get(
     '/v1/analytics/visits/trend',
-    patientAuth.addHandler(analyticsHandler.getVisitTrend),
+    staffAuth.addHandler(analyticsHandler.getVisitTrend),
   );
   router.get(
     '/v1/analytics/deposits-held',
-    patientAuth.addHandler(analyticsHandler.getDepositsHeld),
+    staffAuth.addHandler(analyticsHandler.getDepositsHeld),
   );
   router.post(
     '/v1/reports/generate',
@@ -1085,7 +1087,7 @@ Handler buildApp() {
 
   // ── Reports module — see ReportsHandler for the general (admin) vs
   // individual (any staff, ?patient_id=) access split. ─────────────────────
-  final reportsStaff = patientAuth.addMiddleware(rateLimitMiddleware(analyticsLimiter));
+  final reportsStaff = staffAuth.addMiddleware(rateLimitMiddleware(analyticsLimiter));
   final reportsAdmin = adminOnly.addMiddleware(rateLimitMiddleware(analyticsLimiter));
   router.get('/v1/reports/debtors', reportsAdmin.addHandler(reportsHandler.debtors));
   router.get('/v1/reports/deposits', reportsStaff.addHandler(reportsHandler.deposits));
