@@ -7,6 +7,21 @@ import 'package:lifecare_api/core/utils/uuid.dart';
 import 'package:lifecare_api/modules/patients/patient_repository.dart';
 import 'patient_credentials_repository.dart';
 
+/// A retried "Generate" (e.g. after a dropped connection hid the first
+/// response) must not silently replace a PIN that was already issued —
+/// only an explicit Regenerate (replace_existing) may do that.
+void ensureCanGenerateCredentials({
+  required bool exists,
+  required bool replaceExisting,
+}) {
+  if (exists && !replaceExisting) {
+    throw ApiError.conflict(
+      'Login credentials already exist for this account. Use "Regenerate PIN" '
+      'to issue a new PIN (the current one will stop working).',
+    );
+  }
+}
+
 class PatientCredentialsService {
   final PatientCredentialsRepository _repo;
   final PatientRepository _patientRepo;
@@ -20,9 +35,14 @@ class PatientCredentialsService {
     String patientId, {
     String? email,
     required String actorId,
+    bool replaceExisting = false,
   }) async {
     final patient = await _repo.findPatientById(patientId);
     if (patient == null) throw ApiError.notFound('Patient not found');
+    ensureCanGenerateCredentials(
+      exists: await _repo.findByPatientId(patientId) != null,
+      replaceExisting: replaceExisting,
+    );
 
     if (patient['is_minor'] == true) {
       throw ApiError.forbidden(

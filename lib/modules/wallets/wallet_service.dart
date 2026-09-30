@@ -1,4 +1,5 @@
 import 'package:lifecare_api/core/errors/api_error.dart';
+import 'package:lifecare_api/core/utils/idempotency.dart';
 import 'wallet_repository.dart';
 
 /// How money was paid at the desk — stored on wallet_ledger.payment_method
@@ -91,16 +92,27 @@ class WalletService {
     String walletId,
     Map<String, dynamic> body,
     String cashierId,
-  ) {
+  ) async {
     final p = parseCounterPayment(body);
-    return _repo.recordCounterPayment(
-      walletId: walletId,
-      amount: p.amount,
-      method: p.method,
-      reference: p.reference,
-      notes: p.notes,
-      cashierId: cashierId,
-    );
+    final key = parseIdempotencyKey(body['idempotency_key']);
+    try {
+      return await _repo.recordCounterPayment(
+        walletId: walletId,
+        amount: p.amount,
+        method: p.method,
+        reference: p.reference,
+        notes: p.notes,
+        cashierId: cashierId,
+        idempotencyKey: key,
+      );
+    } catch (e) {
+      // Same key already used on a different wallet (the per-wallet lock
+      // can't see that race; the unique index can).
+      if (key != null && isDuplicateKeyError(e)) {
+        throw ApiError.conflict('idempotency_key was already used for a different payment');
+      }
+      rethrow;
+    }
   }
 
   static const _adjustmentScopedAccountTypes = {'corporate', 'remittance'};

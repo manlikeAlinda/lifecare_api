@@ -338,9 +338,11 @@ class WalletRepository {
     String? reference,
     String? notes,
     required String cashierId,
+    String? idempotencyKey,
   }) async {
-    final entryId = generateUuid();
+    var entryId = generateUuid();
     late int newBalance;
+    var replayed = false;
     await _pool.transactional((conn) async {
       final locked = await conn.execute(
         'SELECT status, balance_shillings FROM wallets '
@@ -349,6 +351,27 @@ class WalletRepository {
       );
       if (locked.rows.isEmpty) throw ApiError.notFound('Wallet not found');
       final row = locked.rows.first.assoc();
+
+      // A resubmitted payment form (same key) returns the payment it already
+      // recorded. The wallet lock above serialises retries on this wallet.
+      if (idempotencyKey != null) {
+        final prior = await conn.execute(
+          "SELECT ${uuidSelect('ledger_id', 'id')}, ${uuidSelect('wallet_id', 'wallet_id')} "
+          'FROM wallet_ledger WHERE idempotency_key = :key LIMIT 1',
+          {'key': idempotencyKey},
+        );
+        if (prior.rows.isNotEmpty) {
+          final p = prior.rows.first.assoc();
+          if (p['wallet_id'] != walletId) {
+            throw ApiError.conflict('idempotency_key was already used for a different payment');
+          }
+          entryId = p['id']!;
+          newBalance = int.parse(row['balance_shillings'] ?? '0');
+          replayed = true;
+          return;
+        }
+      }
+
       if (row['status'] == 'CLOSED') {
         throw ApiError.businessRule(
           "This account's wallet is closed — payments can't be recorded against it",
@@ -357,9 +380,9 @@ class WalletRepository {
 
       await conn.execute(
         'INSERT INTO wallet_ledger (ledger_id, wallet_id, initiated_by, type, '
-        'amount_shillings, reason, payment_method, payment_reference) '
+        'amount_shillings, reason, payment_method, payment_reference, idempotency_key) '
         "VALUES (${uuidParam('entryId')}, ${uuidParam('walletId')}, "
-        "${uuidParam('cashierId')}, 'deposit', :amount, :notes, :method, :reference)",
+        "${uuidParam('cashierId')}, 'deposit', :amount, :notes, :method, :reference, :key)",
         {
           'entryId': entryId,
           'walletId': walletId,
@@ -368,6 +391,7 @@ class WalletRepository {
           'notes': notes,
           'method': method,
           'reference': reference,
+          'key': idempotencyKey,
         },
       );
       await conn.execute(
@@ -393,7 +417,11 @@ class WalletRepository {
         },
       );
     });
-    return {'ledger_id': entryId, 'balance_shillings': newBalance};
+    return {
+      'ledger_id': entryId,
+      'balance_shillings': newBalance,
+      if (replayed) 'replayed': true,
+    };
   }
 
   Future<List<Map<String, dynamic>>> findDependentsByWalletId(

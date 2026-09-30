@@ -17,6 +17,8 @@ class PatientCredentialsHandler {
       patientId,
       email: email,
       actorId: actor.id,
+      // Only "Regenerate PIN" sends this; a plain retry gets a 409.
+      replaceExisting: body['replace_existing'] == true,
     );
 
     return okResponse(result);

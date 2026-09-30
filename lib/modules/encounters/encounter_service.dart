@@ -1,4 +1,5 @@
 import 'package:lifecare_api/core/errors/api_error.dart';
+import 'package:lifecare_api/core/utils/idempotency.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 import 'package:lifecare_api/modules/catalog/catalog_repository.dart';
 import 'package:lifecare_api/modules/patients/patient_repository.dart';
@@ -112,6 +113,14 @@ class EncounterService {
     final patientId = data['patient_id'] as String;
     final dependentId = data['dependent_id'] as String?;
 
+    // A resubmitted form (same key) gets the visit it already created —
+    // never a second visit and a second wallet deduction.
+    final idempotencyKey = parseIdempotencyKey(data['idempotency_key']);
+    if (idempotencyKey != null) {
+      final existing = await _replayed(idempotencyKey, patientId);
+      if (existing != null) return existing;
+    }
+
     final account = await _patientRepo.findById(patientId);
     if (account == null) throw ApiError.notFound('Patient not found');
     validateVisitBeneficiary(
@@ -138,21 +147,43 @@ class EncounterService {
         EncounterPricingResolver.sumTotal(medications);
     final discount = _resolveDiscount(data['discount_shillings'], rawTotal);
 
-    return _repo.create(
-      encounterId: generateUuid(),
-      patientId: patientId,
-      dependentId: dependentId,
-      walletId: wallet['id'] as String,
-      totalCost: rawTotal - discount,
-      discountShillings: discount,
-      createdBy: createdBy,
-      services: services,
-      medications: medications,
-      referenceNumber: data['reference_number'] as String?,
-      serviceType: data['service_type'] as String?,
-      diagnosisCategory: data['diagnosis_category'] as String?,
-      visitedAt: data['visited_at'] as String?,
-    );
+    try {
+      return await _repo.create(
+        encounterId: generateUuid(),
+        patientId: patientId,
+        dependentId: dependentId,
+        walletId: wallet['id'] as String,
+        totalCost: rawTotal - discount,
+        discountShillings: discount,
+        createdBy: createdBy,
+        services: services,
+        medications: medications,
+        referenceNumber: data['reference_number'] as String?,
+        serviceType: data['service_type'] as String?,
+        diagnosisCategory: data['diagnosis_category'] as String?,
+        visitedAt: data['visited_at'] as String?,
+        idempotencyKey: idempotencyKey,
+      );
+    } catch (e) {
+      // Two copies of the same submission raced past the lookup above: the
+      // unique index let exactly one commit; hand the other its result.
+      if (idempotencyKey != null && isDuplicateKeyError(e)) {
+        final existing = await _replayed(idempotencyKey, patientId);
+        if (existing != null) return existing;
+      }
+      rethrow;
+    }
+  }
+
+  /// The visit an earlier submission with [key] created, or null. A key
+  /// reused for a different account is a client bug, not a retry — refuse.
+  Future<Map<String, dynamic>?> _replayed(String key, String patientId) async {
+    final existing = await _repo.findByIdempotencyKey(key);
+    if (existing == null) return null;
+    if (existing['patient_id'] != patientId) {
+      throw ApiError.conflict('idempotency_key was already used for a different visit');
+    }
+    return existing;
   }
 
   /// Validates an optional client-sent discount against the server-resolved

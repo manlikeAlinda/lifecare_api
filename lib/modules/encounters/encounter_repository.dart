@@ -129,6 +129,17 @@ class EncounterRepository {
     return (encounters, total);
   }
 
+  /// The visit created with [key], or null — see migration 047.
+  Future<Map<String, dynamic>?> findByIdempotencyKey(String key) async {
+    final result = await _pool.execute(
+      "SELECT ${uuidSelect('encounter_id', 'id')} FROM encounters "
+      'WHERE idempotency_key = :key LIMIT 1',
+      {'key': key},
+    );
+    if (result.rows.isEmpty) return null;
+    return findById(result.rows.first.assoc()['id']!);
+  }
+
   Future<Map<String, dynamic>?> findById(String id, {bool asPrimaryView = false}) async {
     final result = await _pool.execute(
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
@@ -275,19 +286,23 @@ class EncounterRepository {
     String? serviceType,
     String? diagnosisCategory,
     String? visitedAt,
+    String? idempotencyKey,
   }) async {
     final totalCostInt = totalCost.round();
     final ledgerEntryId = generateUuid();
 
     await _pool.transactional((conn) async {
-      // 1. Insert encounter — include dependent_id when provided.
+      // 1. Insert encounter — include dependent_id when provided. A repeated
+      // idempotency_key fails here (unique index, migration 047) before any
+      // money moves, rolling the whole transaction back.
       await conn.execute(
         'INSERT INTO encounters '
         '(encounter_id, patient_id, dependent_id, reference_number, visited_at, '
-        'service_type, diagnosis_category, total_cost, discount_shillings) '
+        'service_type, diagnosis_category, total_cost, discount_shillings, idempotency_key) '
         "VALUES (UNHEX(REPLACE(:id, '-', '')), UNHEX(REPLACE(:patientId, '-', '')), "
         "${dependentId != null ? "UNHEX(REPLACE(:dependentId, '-', ''))" : 'NULL'}, "
-        ':referenceNumber, :visitedAt, :serviceType, :diagnosisCategory, :totalCost, :discountShillings)',
+        ':referenceNumber, :visitedAt, :serviceType, :diagnosisCategory, :totalCost, '
+        ':discountShillings, :idempotencyKey)',
         {
           'id': encounterId,
           'patientId': patientId,
@@ -298,6 +313,7 @@ class EncounterRepository {
           'diagnosisCategory': diagnosisCategory,
           'totalCost': totalCost,
           'discountShillings': discountShillings.round(),
+          'idempotencyKey': idempotencyKey,
         },
       );
 
