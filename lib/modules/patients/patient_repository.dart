@@ -6,6 +6,16 @@ import 'package:lifecare_api/core/utils/row_map.dart';
 import 'package:lifecare_api/core/utils/uuid.dart';
 import 'package:lifecare_api/modules/wallets/wallet_repository.dart';
 
+/// MEMBERSHIP — which account a beneficiary belongs to is recorded twice:
+///   • patients.primary_account_id — CANONICAL for current membership; every
+///     read (rosters, visit checks, wallet resolution, reports) uses it.
+///   • beneficiary_account_links — the history (who linked/unlinked whom,
+///     when, with what relationship).
+/// Every write here keeps them in step: create/roster import set both;
+/// softDelete ends the link and marks the patient deleted; relationship
+/// edits update both; nothing changes primary_account_id after creation.
+/// Production checked consistent on 2026-10-01 (no active beneficiary
+/// without its link, no stale links, no relationship mismatches).
 class PatientRepository {
   final MySQLConnectionPool _pool;
   final PiiEncryptionService _pii;
@@ -921,6 +931,15 @@ class PatientRepository {
       "WHERE patient_id = UNHEX(REPLACE(:id, '-', ''))",
       params,
     );
+    // Keep the membership record in step (see MEMBERSHIP on the class) —
+    // this staff edit path used to update only patients.relationship.
+    if (fields.containsKey('relationship')) {
+      await _pool.execute(
+        'UPDATE beneficiary_account_links SET relationship = :relationship '
+        "WHERE ${uuidWhere('beneficiary_patient_id', 'id')} AND unlinked_at IS NULL",
+        {'id': id, 'relationship': fields['relationship']},
+      );
+    }
 
     return findById(id);
   }
