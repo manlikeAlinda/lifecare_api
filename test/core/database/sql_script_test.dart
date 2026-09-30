@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:test/test.dart';
 import 'package:lifecare_api/core/database/sql_script.dart';
 
@@ -50,6 +52,22 @@ DROP PROCEDURE IF EXISTS m;
     test('a "--" inside a string is not a comment', () {
       expect(splitSqlScript("SELECT '--not a comment';"), ["SELECT '--not a comment'"]);
     });
+  });
+
+  test('every migration file splits into statements, with no stray DELIMITER', () {
+    final files = Directory('migrations')
+        .listSync()
+        .whereType<File>()
+        .where((f) => migrationNumber(f.uri.pathSegments.last) != null);
+    expect(files, isNotEmpty);
+    for (final f in files) {
+      final stmts = splitSqlScript(f.readAsStringSync());
+      expect(stmts, isNotEmpty, reason: f.path);
+      for (final s in stmts) {
+        expect(s.toUpperCase().contains('DELIMITER'), isFalse,
+            reason: '${f.path}: unsplit DELIMITER in "$s"');
+      }
+    }
   });
 
   group('migrationNumber', () {
