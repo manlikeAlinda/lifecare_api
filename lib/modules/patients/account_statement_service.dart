@@ -78,11 +78,10 @@ class AccountStatementService {
       firstLedgerIdByEncounter.putIfAbsent(encId, () => entry['id'] as String);
     }
 
-    final encounterCache = <String, Map<String, dynamic>>{};
-    for (final encId in firstLedgerIdByEncounter.keys) {
-      final enc = await _encounterRepo.findById(encId);
-      if (enc != null) encounterCache[encId] = enc;
-    }
+    // All of the statement's visits in three queries (it used to be three
+    // queries per visit, so long-standing accounts got steadily slower).
+    final encounterCache =
+        await _encounterRepo.findByIds(firstLedgerIdByEncounter.keys.toList());
 
     final rows = <Map<String, dynamic>>[];
     double runningBalance = 0;

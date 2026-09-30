@@ -162,8 +162,7 @@ class EncounterRepository {
     return findById(result.rows.first.assoc()['id']!);
   }
 
-  Future<Map<String, dynamic>?> findById(String id, {bool asPrimaryView = false}) async {
-    final result = await _pool.execute(
+  static const _detailSelect =
       'SELECT $_uuidCols, e.reference_number, e.visited_at, e.service_type, '
       'e.diagnosis_category, '
       'e.status, e.total_cost, e.discount_shillings, e.created_at, e.reason, e.reason_hidden, '
@@ -172,8 +171,37 @@ class EncounterRepository {
       'dep.is_minor AS dependent_is_minor '
       'FROM encounters e '
       'LEFT JOIN patients p ON p.patient_id = e.patient_id '
-      'LEFT JOIN patients dep ON dep.patient_id = e.dependent_id '
-      "WHERE e.encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
+      'LEFT JOIN patients dep ON dep.patient_id = e.dependent_id ';
+
+  /// Several visits with their service and drug lines in three queries —
+  /// for the account statement, which used to call [findById] once per
+  /// visit (three queries each). Missing ids are simply absent.
+  Future<Map<String, Map<String, dynamic>>> findByIds(List<String> ids) async {
+    if (ids.isEmpty) return {};
+    final params = <String, dynamic>{};
+    final placeholders = <String>[];
+    for (var i = 0; i < ids.length; i++) {
+      params['id$i'] = ids[i];
+      placeholders.add("UNHEX(REPLACE(:id$i, '-', ''))");
+    }
+    final result = await _pool.execute(
+      '$_detailSelect WHERE e.encounter_id IN (${placeholders.join(', ')})',
+      params,
+    );
+    final svcMap = await _findServicesForIds(ids);
+    final medMap = await _findMedicationsForIds(ids);
+    return {
+      for (final row in result.rows)
+        for (final e in [_redact(_rowToMap(row), false)])
+          e['id'] as String: e
+            ..['services'] = svcMap[e['id']] ?? []
+            ..['medications'] = medMap[e['id']] ?? [],
+    };
+  }
+
+  Future<Map<String, dynamic>?> findById(String id, {bool asPrimaryView = false}) async {
+    final result = await _pool.execute(
+      "$_detailSelect WHERE e.encounter_id = UNHEX(REPLACE(:id, '-', '')) LIMIT 1",
       {'id': id},
     );
     if (result.rows.isEmpty) return null;
