@@ -1,4 +1,5 @@
 import 'package:shelf/shelf.dart';
+import 'package:lifecare_api/core/middleware/rate_limit_middleware.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
@@ -25,6 +26,11 @@ class AuthHandler {
         {'field': 'username', 'message': 'username or email is required'},
       ]);
     }
+
+    // Per-account brute-force cap (the IP limiter can be bypassed by
+    // rotating X-Forwarded-For) — see accountLoginLimiter.
+    enforceAccountLimit(
+        accountLoginLimiter, 'staff:${(email ?? username)!.trim()}');
 
     final result = await _service.login(
       username: username?.trim(),

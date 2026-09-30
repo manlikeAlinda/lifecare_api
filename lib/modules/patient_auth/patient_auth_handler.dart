@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:shelf/shelf.dart';
+import 'package:lifecare_api/core/middleware/rate_limit_middleware.dart';
 import 'package:lifecare_api/core/config/app_config.dart';
 import 'package:lifecare_api/core/utils/response.dart';
 import 'package:lifecare_api/core/validation/validator.dart';
@@ -62,6 +63,9 @@ class PatientAuthHandler {
       ..required('password')
       ..throwIfInvalid();
 
+    // Per-account brute-force cap — see accountLoginLimiter.
+    enforceAccountLimit(accountLoginLimiter, 'patient:${body['phone']}');
+
     // Single login: accepts primary and beneficiary accounts alike (a
     // beneficiary only with surface "mobile" — see PatientAuthService.login).
     final result = await _service.login(
@@ -86,6 +90,9 @@ class PatientAuthHandler {
       ..required('password')
       ..throwIfInvalid();
 
+    // Same per-account budget as login() — both check the same password.
+    enforceAccountLimit(accountLoginLimiter, 'patient:${body['phone']}');
+
     final result = await _service.login(
       phone: body['phone'] as String,
       password: body['password'] as String,
@@ -105,6 +112,10 @@ class PatientAuthHandler {
       ..minLength('code', 6)
       ..maxLength('code', 6)
       ..throwIfInvalid();
+
+    // A 6-digit code has only a million values: cap guesses per challenge
+    // (a new challenge needs a fresh password login, itself capped).
+    enforceAccountLimit(accountLoginLimiter, 'totp:${body['challenge_token']}');
 
     final result = await _service.verifyTotpLogin(
       challengeToken: body['challenge_token'] as String,
