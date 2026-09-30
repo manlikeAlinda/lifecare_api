@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
+import 'package:lifecare_api/core/health.dart';
 import 'package:lifecare_api/core/database/database.dart';
 import 'package:lifecare_api/core/errors/api_error.dart';
 import 'package:lifecare_api/core/logging/logger.dart';
@@ -144,9 +145,12 @@ Handler buildApp() {
   // ── Router ───────────────────────────────────────────────────────────────────
   final router = Router();
 
-  // Health check (public)
-  router.get('/health', (Request _) => Response.ok('{"status":"ok"}',
-      headers: {'content-type': 'application/json'}));
+  // Health checks (public). Liveness = process up; readiness = database
+  // reachable (503 otherwise). /health reports readiness.
+  Future<void> pingDatabase() => pool.execute('SELECT 1');
+  router.get('/healthz/liveness', (Request _) => livenessResponse());
+  router.get('/healthz/readiness', (Request _) => readinessResponse(pingDatabase));
+  router.get('/health', (Request _) => readinessResponse(pingDatabase));
 
   // ── Auth (IAM) ───────────────────────────────────────────────────────────────
   router.post(
